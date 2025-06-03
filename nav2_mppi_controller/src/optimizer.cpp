@@ -101,6 +101,11 @@ void Optimizer::getParams()
   getParam(s.compensate_control_delay, "compensate_control_delay", false);
   getParam(s.control_delay_duration, "control_delay_duration", 0.0f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
+  getParam(use_adaptive_lag_, "use_adaptive_lag", false);
+  getParam(smoothing_alpha_, "smoothing_alpha", 0.2f);
+  getParam(min_tau_, "min_tau", 0.01f);
+  getParam(max_tau_, "max_tau", 0.5f);
+  getParam(debug_tau_, "debug_tau", false);
 
   s.base_constraints.ax_max = fabs(s.base_constraints.ax_max);
   if (s.base_constraints.ax_min > 0.0) {
@@ -129,6 +134,13 @@ void Optimizer::getParams()
   double controller_frequency;
   getParentParam(controller_frequency, "controller_frequency", 0.0, ParameterType::Static);
   setOffset(controller_frequency);
+
+  if (debug_tau_) {
+    RCLCPP_WARN(
+      logger_,
+      "debug_tau is enabled: tau_vx will be assigned to twist.linear.y for debugging. "
+      "Disable for normal operation.");
+  }
 }
 
 void Optimizer::setOffset(double controller_frequency)
@@ -170,10 +182,12 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   generated_trajectories_.reset(settings_.batch_size, settings_.time_steps);
 
   noise_generator_.reset(settings_, isHolonomic());
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(settings_.constraints, settings_.model_dt,
+                            use_adaptive_lag_, smoothing_alpha_, min_tau_, max_tau_);
   trajectory_validator_->initialize(
     parent_, name_ + ".TrajectoryValidator",
     costmap_ros_, parameters_handler_, tf_buffer_, settings_);
+  last_cmd_vel_ = geometry_msgs::msg::Twist();
 
   RCLCPP_INFO(logger_, "Optimizer reset");
 }
@@ -264,6 +278,8 @@ void Optimizer::prepare(
   path_ = utils::toTensor(plan);
   costs_.setZero(settings_.batch_size);
   goal_ = goal;
+
+  motion_model_->updateTau(robot_speed, last_cmd_vel_, settings_.model_dt);
 
   critics_data_.fail_flag = false;
   critics_data_.goal_checker = goal_checker;
@@ -640,7 +656,8 @@ void Optimizer::setMotionModel(const std::string & model)
               "Model " + model + " is not valid! Valid options are DiffDrive, Omni, "
               "or Ackermann"));
   }
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(
+    settings_.constraints, settings_.model_dt, use_adaptive_lag_, smoothing_alpha_, min_tau_, max_tau_);
 }
 
 void Optimizer::setSpeedLimit(double speed_limit, bool percentage)

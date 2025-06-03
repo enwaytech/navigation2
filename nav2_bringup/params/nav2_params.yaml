@@ -135,6 +135,11 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
+      use_adaptive_lag: true
+      smoothing_alpha: 0.2
+      min_tau: 0.01
+      max_tau: 0.5
+      debug_tau: true  # Plots tau_vx in twist.linear.y
       visualize: true
       publish_optimal_trajectory: true
       regenerate_noises: true

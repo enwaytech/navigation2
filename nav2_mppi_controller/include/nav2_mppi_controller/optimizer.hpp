@@ -299,6 +299,12 @@ protected:
     std::nullopt, std::nullopt};  /// Caution, keep references
 
   rclcpp::Logger logger_{rclcpp::get_logger("MPPIController")};
+  geometry_msgs::msg::Twist last_cmd_vel_;
+  bool use_adaptive_lag_{false};
+  float smoothing_alpha_{0.2f};
+  float min_tau_{0.01f};
+  float max_tau_{0.5f};
+  bool debug_tau_{false};
 };
 
 }  // namespace mppi
