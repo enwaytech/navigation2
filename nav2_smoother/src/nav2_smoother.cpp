@@ -23,7 +23,7 @@
 #include "nav2_core/smoother_exceptions.hpp"
 #include "nav2_smoother/nav2_smoother.hpp"
 #include "nav2_ros_common/node_utils.hpp"
-#include "tf2_ros/create_timer_ros.hpp"
+#include "tf2_ros/create_timer_ros.h"
 
 using namespace std::chrono_literals;
 

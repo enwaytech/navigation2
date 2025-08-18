@@ -47,7 +47,7 @@
 #include "laser_geometry/laser_geometry.hpp"
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wreorder"
-#include "tf2_ros/message_filter.hpp"
+#include "tf2_ros/message_filter.h"
 #pragma GCC diagnostic pop
 
 #include "message_filters/subscriber.hpp"

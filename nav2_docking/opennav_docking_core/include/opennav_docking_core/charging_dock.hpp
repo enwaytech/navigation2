@@ -20,7 +20,7 @@
 
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "tf2_ros/buffer.hpp"
+#include "tf2_ros/buffer.h"
 
 
 namespace opennav_docking_core

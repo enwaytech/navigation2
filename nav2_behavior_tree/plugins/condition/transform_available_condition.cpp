@@ -18,7 +18,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "tf2/time.hpp"
-#include "tf2_ros/buffer.hpp"
+#include "tf2_ros/buffer.h"
 
 #include "nav2_behavior_tree/plugins/condition/transform_available_condition.hpp"
 
