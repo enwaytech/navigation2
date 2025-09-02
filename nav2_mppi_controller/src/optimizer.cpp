@@ -210,8 +210,6 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     }
   } while (fallback(critics_data_.fail_flag || !trajectory_valid));
 
-  utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
-
   std::cout << "Control Sequence End:\n";
   std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
   std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
@@ -289,7 +287,7 @@ void Optimizer::prepare(
   state_.pose = robot_pose;
   state_.speed = robot_speed;
   path_ = utils::toTensor(plan);
-  costs_.setZero();
+  costs_.setZero(settings_.batch_size);
   goal_ = goal;
 
   critics_data_.fail_flag = false;
@@ -563,10 +561,7 @@ void Optimizer::updateControlSequence()
     control_sequence_.vy = state_.cvy.transpose().matrix() * softmax_mat;
   }
 
-  // Debugging output for control sequence before motion model constraints
-  std::cout << "Control Sequence Before Motion Model Constraints:\n";
-  std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
-  std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
+  utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
 
   applyControlSequenceConstraints();
 }
