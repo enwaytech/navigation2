@@ -67,6 +67,11 @@ std::string CriticManager::getFullName(const std::string & name)
 void CriticManager::evalTrajectoriesScores(
   CriticData & data) const
 {
+  std::cout << "evalTrajectoriesScores:" << std::endl;
+  std::cout << "data.state.vx: " << data.state.vx(Eigen::seq(0, 9), 0).transpose() << "\n";
+  std::cout << "data.state.cvx: " << data.state.cvx(Eigen::seq(0, 9), 0).transpose() << "\n";
+  std::cout << "data.trajectories.x: " << data.trajectories.x(Eigen::seq(0, 9), 0).transpose() << "\n";
+
   for (const auto & critic : critics_) {
     if (data.fail_flag) {
       break;

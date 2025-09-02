@@ -83,7 +83,15 @@ void ConstraintCritic::score(CriticData & data)
     auto & vx = data.state.vx;
     auto & wz = data.state.wz;
     float min_turning_rad = acker->getMinTurningRadius();
+
+    std::cout << "constraint_critic acker vx: " << data.state.vx(Eigen::seq(0, 9), 0).transpose() << std::endl;
+    std::cout << "constraint_critic acker wz: " << data.state.wz(Eigen::seq(0, 9), 0).transpose() << std::endl;
+
     auto out_of_turning_rad_motion = (min_turning_rad - (vx.abs() / wz.abs())).max(0.0f);
+    std::cout << "constraint_critic acker wz_safe: " << wz_safe(Eigen::seq(0, 9), 0).transpose() << std::endl;
+    std::cout << "constraint_critic acker out_of_turning_rad_motion: " << out_of_turning_rad_motion(Eigen::seq(0, 9), 0).transpose() << std::endl;
+
+    std::cout << "constraint_critic costs before: " << data.costs(Eigen::seq(0, 9)).transpose() << std::endl;
     if (power_ > 1u) {
       data.costs += ((((vx - max_vel_).max(0.0f) + (min_vel_ - vx).max(0.0f) +
         out_of_turning_rad_motion) * data.model_dt).rowwise().sum().eval() *
@@ -92,6 +100,8 @@ void ConstraintCritic::score(CriticData & data)
       data.costs += ((((vx - max_vel_).max(0.0f) + (min_vel_ - vx).max(0.0f) +
         out_of_turning_rad_motion) * data.model_dt).rowwise().sum().eval() * weight_).eval();
     }
+    std::cout << "constraint_critic costs after: " << data.costs(Eigen::seq(0, 9)).transpose() << std::endl;
+
     return;
   }
 }

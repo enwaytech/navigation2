@@ -212,7 +212,7 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
 
   utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
 
-  std::cout << "Control Sequence After SGF:\n";
+  std::cout << "Control Sequence End:\n";
   std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
   std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
   computeControlSequenceAccel(control_sequence_);
@@ -330,7 +330,7 @@ void Optimizer::applyControlSequenceConstraints()
   std::cout << "ax_max: " << s.constraints.ax_max << ", ax_min: " << s.constraints.ax_min << "\n";
   std::cout << "ay_max: " << s.constraints.ay_max << ", ay_min: " << s.constraints.ay_min << "\n";
   std::cout << "az_max: " << s.constraints.az_max << "\n";
-  computeControlSequenceAccel(control_sequence_);
+  // computeControlSequenceAccel(control_sequence_);
 
   float max_delta_vx = s.model_dt * s.constraints.ax_max;
   float min_delta_vx = s.model_dt * s.constraints.ax_min;
@@ -376,11 +376,11 @@ void Optimizer::applyControlSequenceConstraints()
 
   motion_model_->applyConstraints(control_sequence_);
 
-  // Debugging output for control sequence after motion model constraints
-  std::cout << "Control Sequence After Motion Model Constraints:\n";
-  std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
-  std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
-  computeControlSequenceAccel(control_sequence_);
+  // // Debugging output for control sequence after motion model constraints
+  // std::cout << "Control Sequence After Motion Model Constraints:\n";
+  // std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
+  // std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
+  // computeControlSequenceAccel(control_sequence_);
 }
 
 void Optimizer::updateStateVelocities(
@@ -545,10 +545,15 @@ void Optimizer::updateControlSequence()
     costs_ += (gamma_vy * (bounded_noises_vy.rowwise() * vy_T).rowwise().sum()).eval();
   }
 
+  std::cout << "costs_: " << costs_(Eigen::seq(0, 9)).transpose() << "\n";
+
   auto costs_normalized = costs_ - costs_.minCoeff();
   const float inv_temp = 1.0f / s.temperature;
   auto softmaxes = (-inv_temp * costs_normalized).exp().eval();
   softmaxes /= softmaxes.sum();
+
+  std::cout << "costs_normalized: " << costs_normalized(Eigen::seq(0, 9)).transpose() << "\n";
+  std::cout << "softmaxes: " << softmaxes(Eigen::seq(0, 9)).transpose() << "\n";
 
   auto softmax_mat = softmaxes.matrix();
   control_sequence_.vx = state_.cvx.transpose().matrix() * softmax_mat;
