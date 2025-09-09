@@ -210,10 +210,10 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     }
   } while (fallback(critics_data_.fail_flag || !trajectory_valid));
 
-  std::cout << "Control Sequence End:\n";
+  // std::cout << "Control Sequence End:\n";
   // std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
   // std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
-  computeControlSequenceAccel(control_sequence_);
+  // computeControlSequenceAccel(control_sequence_);
 
   auto control = getControlFromSequenceAsTwist(plan.header.stamp);
 
@@ -324,10 +324,10 @@ void Optimizer::applyControlSequenceConstraints()
   auto & s = settings_;
 
   // Debugging output for constraint values
-  std::cout << "****Acceleration Constraints:\n";
-  std::cout << "ax_max: " << s.constraints.ax_max << ", ax_min: " << s.constraints.ax_min << "\n";
-  std::cout << "ay_max: " << s.constraints.ay_max << ", ay_min: " << s.constraints.ay_min << "\n";
-  std::cout << "az_max: " << s.constraints.az_max << "\n";
+  // std::cout << "****Acceleration Constraints:\n";
+  // std::cout << "ax_max: " << s.constraints.ax_max << ", ax_min: " << s.constraints.ax_min << "\n";
+  // std::cout << "ay_max: " << s.constraints.ay_max << ", ay_min: " << s.constraints.ay_min << "\n";
+  // std::cout << "az_max: " << s.constraints.az_max << "\n";
   // computeControlSequenceAccel(control_sequence_);
 
   float max_delta_vx = s.model_dt * s.constraints.ax_max;
