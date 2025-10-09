@@ -192,6 +192,9 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
   bool trajectory_valid = true;
 
   do {
+    // std::cout << "\n\t control_sequence_ Before optimize:\n\t\t"
+    //           << control_sequence_.vx(Eigen::seq(0, 5)).transpose() << "\n\t"
+    //           << control_sequence_.wz(Eigen::seq(0, 5)).transpose() << "\n\t" << std::endl;
     optimize();
     optimal_trajectory = getOptimizedTrajectory(control_sequence_);
     optimal_trajectory_unconstrained_ = getOptimizedTrajectory(control_sequence_virtual_);
@@ -223,6 +226,33 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     shiftControlSequence();
   }
 
+  {
+    auto & s = settings_;
+    constexpr float epsilon = 1e-4f;
+
+    // Check if accelerations exceed constraints
+    double dt = (control.header.stamp.sec - prev_control_twist_.header.stamp.sec)
+                + 1e-9 * (control.header.stamp.nanosec - prev_control_twist_.header.stamp.nanosec);
+
+    float ax = (control.twist.linear.x - prev_control_twist_.twist.linear.x) / s.model_dt;
+    float ax_real = (control.twist.linear.x - prev_control_twist_.twist.linear.x) / dt;
+    if (std::abs(ax) > s.constraints.ax_max + epsilon) {
+      std::cout << "Acceleration constraint violated from last command "  << ":\t";
+      std::cout << "vx[i]: " << control.twist.linear.x << ", vx[i-1]: " << prev_control_twist_.twist.linear.x
+      << ", ax: " << ax << " real dt: " << dt << " real ax " << ax_real << "\n" ;
+    }
+    float wz = (control.twist.angular.z - prev_control_twist_.twist.angular.z) / s.model_dt;
+    float wz_real = (control.twist.angular.z - prev_control_twist_.twist.angular.z) / dt;
+    if (std::abs(wz) > s.constraints.az_max + epsilon) {
+      std::cout << "Angular Acceleration constraint violated from last command "  << ":\t";
+      std::cout << "wz[i]: " << control.twist.angular.z << ", wz[i-1]: " << prev_control_twist_.twist.angular.z
+      << ", az: " << wz << " real dt: " <<  dt << " real az " << wz_real << "\n" ;
+    }
+  }
+
+  prev_control_twist_ = control;
+  prev_control_sequence_ = control_sequence_;
+
   return std::make_tuple(control, optimal_trajectory);
 }
 
@@ -253,6 +283,9 @@ void Optimizer::computeControlSequenceAccel(const models::ControlSequence& contr
 
 void Optimizer::optimize()
 {
+  // std::cout << "optimize: control_sequence_:\n\t\t"
+  //           << control_sequence_.vx(Eigen::seq(0, 9)).transpose() << "\n\t\t"
+  //           << control_sequence_.wz(Eigen::seq(0, 9)).transpose() << std::endl;
   for (size_t i = 0; i < settings_.iteration_count; ++i) {
     generateNoisedTrajectories();
     critic_manager_.evalTrajectoriesScores(critics_data_);
@@ -302,6 +335,15 @@ void Optimizer::prepare(
 
 void Optimizer::shiftControlSequence()
 {
+  // std::cout << "shiftControlSequence:\n\t" //\tsettings_.shift_control_sequence" << settings_.shift_control_sequence
+  //           << "\n\t control_sequence_ Before:\n\t\t"
+  //           << control_sequence_.vx(Eigen::seq(0, 5)).transpose() << "\n\t"
+  //           << control_sequence_.wz(Eigen::seq(0, 5)).transpose() << "\n\t"
+  //           /*<< control_sequence_.vx(Eigen::seq(Eigen::last -5, Eigen::last)).transpose()*/<< std::endl;
+  // std::cout << "\n\t control_sequence_virtual_ Before:\n\t\t"
+  //           << control_sequence_virtual_.vx(Eigen::seq(0, 5)).transpose() << "\n\t"
+  //           << control_sequence_virtual_.wz(Eigen::seq(0, 5)).transpose() << "\n\t" << std::endl;
+
   // control_sequence_ = control_sequence_virtual_;
 
   auto size = control_sequence_.vx.size();
@@ -314,8 +356,7 @@ void Optimizer::shiftControlSequence()
   //           << control_sequence_.wz(Eigen::seq(0, 5)).transpose() << "\n\t\t"
   //           /*<< control_sequence_.vx(Eigen::seq(Eigen::last -5, Eigen::last)).transpose()*/<< std::endl;
 
-  if (isHolonomic())
-  {
+  if (isHolonomic()) {
     utils::shiftColumnsByOnePlace(control_sequence_.vy, -1);
     control_sequence_.vy(size - 1) = control_sequence_.vy(size - 2);
   }
@@ -333,6 +374,10 @@ void Optimizer::applyControlSequenceConstraints()
 {
   auto & s = settings_;
 
+  // std::cout << "Control Sequence Before Motion Model Constraints:\n";
+  // std::cout << "vx: " << control_sequence_.vx(Eigen::seq(0, 9)).transpose() << "\n";
+  // std::cout << "wz: " << control_sequence_.wz(Eigen::seq(0, 9)).transpose() << "\n";
+
   // Debugging output for constraint values
   // std::cout << "****Acceleration Constraints:\n";
   // std::cout << "ax_max: " << s.constraints.ax_max << ", ax_min: " << s.constraints.ax_min << "\n";
@@ -340,17 +385,23 @@ void Optimizer::applyControlSequenceConstraints()
   // std::cout << "az_max: " << s.constraints.az_max << "\n";
   // computeControlSequenceAccel(control_sequence_);
 
+  // std::cout << "applyControlSequenceConstraints: \n  state.u_app \n\t" << state_.vx(Eigen::seq(0, 2), Eigen::seq(0, 2))
+  //           << "\n\t" << state_.wz(Eigen::seq(0, 2), Eigen::seq(0, 2)) << std::endl
+  //           << "\n  state.u_virt\n\t" << state_.cvx(Eigen::seq(0, 2), Eigen::seq(0, 2)) << "\n\t"
+  //           << state_.cwz(Eigen::seq(0, 2), Eigen::seq(0, 2)) << "\n  ctrl_seq: \n\t"
+  //           << control_sequence_.vx(Eigen::seq(0, 5)).transpose() << "\n\t"
+  //           << control_sequence_.wz(Eigen::seq(0, 5)).transpose() << std::endl;
+
   float max_delta_vx = s.model_dt * s.constraints.ax_max;
   float min_delta_vx = s.model_dt * s.constraints.ax_min;
   float max_delta_vy = s.model_dt * s.constraints.ay_max;
   float min_delta_vy = s.model_dt * s.constraints.ay_min;
   float max_delta_wz = s.model_dt * s.constraints.az_max;
+
   // --tried 1 limit ctrl_seq_(0) based on accel_limit from current robot speed (= state.vx(0,0))  (instead of in predict -> see it still accel issue)
-  // TODO 1 only constrain the published controls (u0 & u1), but keep the unconstrained sequence for warm start
   // TODO 4 or ideally based on last published command
 
   // at this point, control_sequence_ contains the softmax mean of state_.cu (u_virt)]
-
   /*
   float vx_last = utils::clamp(s.constraints.vx_min, s.constraints.vx_max, control_sequence_.vx(0));
   float wz_last = utils::clamp(-s.constraints.wz, s.constraints.wz, control_sequence_.wz(0));
@@ -384,18 +435,18 @@ void Optimizer::applyControlSequenceConstraints()
     vx_last = vx_curr;
 
     float & wz_curr = control_sequence_.wz(i);
-    if (i==0)
-    {
-      std::cout << "control_sequence_.wz(0) BEFORE: " << control_sequence_.wz(i) << std::endl;
-    }
+    // if (i==0)
+    // {
+    //   std::cout << "control_sequence_.wz(0) BEFORE: " << control_sequence_.wz(i) << std::endl;
+    // }
     wz_curr = utils::clamp(-s.constraints.wz, s.constraints.wz, wz_curr);
     wz_curr = utils::clamp(wz_last - max_delta_wz, wz_last + max_delta_wz, wz_curr);
     wz_last = wz_curr;
 
-        if (i==0)
-    {
-      std::cout << "control_sequence_.wz(0) AFTER: " << control_sequence_.wz(i) << std::endl;
-    }
+    // if (i==0)
+    // {
+    //   std::cout << "control_sequence_.wz(0) AFTER: " << control_sequence_.wz(i) << std::endl;
+    // }
     if (isHolonomic()) {
       float & vy_curr = control_sequence_.vy(i);
       vy_curr = utils::clamp(-s.constraints.vy, s.constraints.vy, vy_curr);
@@ -410,10 +461,9 @@ void Optimizer::applyControlSequenceConstraints()
 
   motion_model_->applyConstraints(control_sequence_);
 
-  // // Debugging output for control sequence after motion model constraints
   // std::cout << "Control Sequence After Motion Model Constraints:\n";
-  // std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
-  // std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
+  // std::cout << "vx: " << control_sequence_.vx(Eigen::seq(0, 9)).transpose() << "\n";
+  // std::cout << "wz: " << control_sequence_.wz(Eigen::seq(0, 9)).transpose() << "\n";
   // computeControlSequenceAccel(control_sequence_);
 }
 
@@ -433,6 +483,9 @@ void Optimizer::updateInitialStateVelocities(
   if (isHolonomic()) {
     state.vy.col(0) = static_cast<float>(state.speed.linear.y);
   }
+
+  // std::cout << "updateInitialStateVelocities: (" << state.speed.linear.x << "  ,  " << state.speed.angular.z << ")\n"
+  //  << state.vx(0, Eigen::seq(0, 5)) << "\n " << state.wz(0, Eigen::seq(0, 5)) << std::endl;
 }
 
 void Optimizer::propagateStateVelocitiesFromInitials(
@@ -621,6 +674,11 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
 
   auto vx = control_sequence_.vx(offset);
   auto wz = control_sequence_.wz(offset);
+
+  // std::cout << "getControlFromSequenceAsTwist:\n\tsettings_.shift_control_sequence" << settings_.shift_control_sequence
+  //           << "\n\t (vx , wz): (" << vx << ", " << wz << ")\n\t control_sequence_:\n\t\t"
+  //           << control_sequence_.vx(Eigen::seq(0, 9)).transpose() << "\n\t\t"
+  //           << control_sequence_.wz(Eigen::seq(0, 9)).transpose() << std::endl;
 
   if (isHolonomic()) {
     auto vy = control_sequence_.vy(offset);
