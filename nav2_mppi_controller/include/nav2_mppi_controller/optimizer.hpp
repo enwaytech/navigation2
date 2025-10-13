@@ -193,13 +193,13 @@ protected:
    * @brief  Update velocities in state
    * @param state fill state with velocities on each step
    */
-  void updateStateVelocities(models::State & state) const;
+  void updateStateVelocities(models::State & state);
 
   /**
    * @brief  Update initial velocity in state
    * @param state fill state
    */
-  void updateInitialStateVelocities(models::State & state) const;
+  void updateInitialStateVelocities(models::State & state);
 
   /**
    * @brief predict velocities in state using model
@@ -286,6 +286,7 @@ protected:
   Eigen::ArrayXf costs_;
   geometry_msgs::msg::TwistStamped prev_control_twist_;
   models::ControlSequence prev_control_sequence_;
+  Eigen::Array3f initial_velocities_;
 
   Eigen::ArrayXXf optimal_trajectory_unconstrained_;
 
