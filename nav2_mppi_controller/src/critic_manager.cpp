@@ -67,11 +67,43 @@ std::string CriticManager::getFullName(const std::string & name)
 void CriticManager::evalTrajectoriesScores(
   CriticData & data) const
 {
+  // std::cout << "evalTrajectoriesScores:" << std::endl;
+  // std::cout << "data.state.vx: " << data.state.vx(Eigen::seq(0, 9), 0).transpose() << "\n";
+  // std::cout << "data.state.cvx: " << data.state.cvx(Eigen::seq(0, 9), 0).transpose() << "\n";
+  // std::cout << "data.trajectories.x: " << data.trajectories.x(Eigen::seq(0, 9), 0).transpose() << "\n";
+
+  if (data.critic_costs.size() < critics_.size()) {
+    data.critic_costs.resize(critics_.size());
+  }
+
+  unsigned int i = 0;
   for (const auto & critic : critics_) {
+
     if (data.fail_flag) {
       break;
     }
+    const auto cost_before = data.costs;
     critic->score(data);
+
+    data.critic_costs.at(i) = data.costs - cost_before;
+    i++;
+  }
+
+  // Print individual critic costs for the best trajectory (lowest total cost)
+  if (!data.critic_costs.empty() && data.costs.size() > 0) {
+    Eigen::Index best_traj_idx;
+    data.costs.minCoeff(&best_traj_idx);
+
+    double total_cost = data.costs(best_traj_idx);
+    RCLCPP_INFO(logger_, "Best trajectory (#%ld) individual critic costs:", best_traj_idx);
+
+    for (size_t j = 0; j < data.critic_costs.size() && j < critics_.size(); ++j) {
+      double critic_cost = data.critic_costs[j](best_traj_idx);
+      double percentage = (total_cost > 0.0) ? (critic_cost / total_cost) * 100.0 : 0.0;
+      RCLCPP_INFO(logger_, "  %s: %.4f (%.1f%%)",
+                  critics_[j]->getName().c_str(), critic_cost, percentage);
+    }
+    RCLCPP_INFO(logger_, "  Total cost: %.4f", total_cost);
   }
 }
 
