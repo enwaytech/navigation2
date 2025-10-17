@@ -679,10 +679,8 @@ void Optimizer::updateControlSequence()
 geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   const builtin_interfaces::msg::Time & stamp)
 {
-  unsigned int offset = settings_.shift_control_sequence ? 1 : 0;
-
-  auto vx = control_sequence_.vx(offset);
-  auto wz = control_sequence_.wz(offset);
+  auto vx = control_sequence_.vx(0);
+  auto wz = control_sequence_.wz(0);
 
   // std::cout << "getControlFromSequenceAsTwist:\n\tsettings_.shift_control_sequence" << settings_.shift_control_sequence
   //           << "\n\t (vx , wz): (" << vx << ", " << wz << ")\n\t control_sequence_:\n\t\t"
@@ -690,7 +688,7 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   //           << control_sequence_.wz(Eigen::seq(0, 9)).transpose() << std::endl;
 
   if (isHolonomic()) {
-    auto vy = control_sequence_.vy(offset);
+    auto vy = control_sequence_.vy(0);
     return utils::toTwistStamped(vx, vy, wz, stamp, costmap_ros_->getBaseFrameID());
   }
 
