@@ -158,7 +158,7 @@ public:
       }
     }
 
-    // applyConstraints(state);
+    applyConstraints(state);
   }
 
   /**
