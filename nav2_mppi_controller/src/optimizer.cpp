@@ -188,7 +188,6 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
 {
   prepare(robot_pose, robot_speed, plan, goal, goal_checker);
   Eigen::ArrayXXf optimal_trajectory;
-  Eigen::ArrayXXf optimal_trajectory_unconstraint;
   bool trajectory_valid = true;
 
   do {
@@ -196,8 +195,7 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     //           << control_sequence_.vx(Eigen::seq(0, 5)).transpose() << "\n\t"
     //           << control_sequence_.wz(Eigen::seq(0, 5)).transpose() << "\n\t" << std::endl;
     optimize();
-    optimal_trajectory = getOptimizedTrajectory(control_sequence_);
-    optimal_trajectory_unconstrained_ = getOptimizedTrajectory(control_sequence_virtual_);
+    optimal_trajectory = getOptimizedTrajectory();
     switch (trajectory_validator_->validateTrajectory(
       optimal_trajectory, control_sequence_, robot_pose, robot_speed, plan, goal))
     {
@@ -216,8 +214,8 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
   } while (fallback(critics_data_.fail_flag || !trajectory_valid));
 
   // std::cout << "Control Sequence End:\n";
-  // // std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
-  // // std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
+  // std::cout << "vx: " << control_sequence_.vx.transpose() << "\n";
+  // std::cout << "wz: " << control_sequence_.wz.transpose() << "\n";
   // computeControlSequenceAccel(control_sequence_);
 
   auto control = getControlFromSequenceAsTwist(plan.header.stamp);
@@ -594,18 +592,18 @@ void Optimizer::integrateStateVelocities(
   }
 }
 
-Eigen::ArrayXXf Optimizer::getOptimizedTrajectory(const models::ControlSequence& control_sequence) const
+Eigen::ArrayXXf Optimizer::getOptimizedTrajectory()
 {
   const bool is_holo = isHolonomic();
   Eigen::ArrayXXf sequence = Eigen::ArrayXXf(settings_.time_steps, is_holo ? 3 : 2);
   Eigen::Array<float, Eigen::Dynamic, 3> trajectories =
     Eigen::Array<float, Eigen::Dynamic, 3>(settings_.time_steps, 3);
 
-  sequence.col(0) = control_sequence.vx;
-  sequence.col(1) = control_sequence.wz;
+  sequence.col(0) = control_sequence_.vx;
+  sequence.col(1) = control_sequence_.wz;
 
   if (is_holo) {
-    sequence.col(2) = control_sequence.vy;
+    sequence.col(2) = control_sequence_.vy;
   }
 
   integrateStateVelocities(trajectories, sequence);
@@ -615,17 +613,6 @@ Eigen::ArrayXXf Optimizer::getOptimizedTrajectory(const models::ControlSequence&
 const models::ControlSequence & Optimizer::getOptimalControlSequence()
 {
   return control_sequence_;
-}
-
-
-const models::ControlSequence & Optimizer::getOptimalControlSequenceUnconstrained()
-{
-  return control_sequence_virtual_;
-}
-
-const Eigen::ArrayXXf & Optimizer::getOptimalTrajectoryUnconstrained()
-{
-  return optimal_trajectory_unconstrained_;
 }
 
 void Optimizer::updateControlSequence()
