@@ -146,8 +146,6 @@ protected:
    */
   void optimize();
 
-  void computeControlSequenceAccel(const models::ControlSequence& control_sequence);
-
   /**
    * @brief Prepare state information on new request for trajectory rollouts
    * @param robot_pose Pose of the robot at given time
@@ -283,8 +281,6 @@ protected:
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
-  geometry_msgs::msg::TwistStamped prev_control_twist_;
-  models::ControlSequence prev_control_sequence_;
   Eigen::Array3f initial_velocities_;
 
   CriticData critics_data_ = {
