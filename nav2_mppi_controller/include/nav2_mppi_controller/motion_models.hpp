@@ -89,13 +89,15 @@ public:
         0).select(state.vx.col(i - 1) + max_delta_vx,
         state.vx.col(i - 1) - min_delta_vx);
 
-      state.vx.col(i) = state.cvx.col(i - 1)
+      state.cvx.col(i - 1) = state.cvx.col(i - 1)
         .cwiseMax(lower_bound_vx)
         .cwiseMin(upper_bound_vx);
+      state.vx.col(i) = state.cvx.col(i - 1);
 
-      state.wz.col(i) = state.cwz.col(i - 1)
+      state.cwz.col(i - 1) = state.cwz.col(i - 1)
         .cwiseMax(state.wz.col(i - 1) - max_delta_wz)
         .cwiseMin(state.wz.col(i - 1) + max_delta_wz);
+      state.wz.col(i) = state.cwz.col(i - 1);
 
       if (is_holo) {
         auto lower_bound_vy = (state.vy.col(i - 1) >
@@ -105,9 +107,10 @@ public:
           0).select(state.vy.col(i - 1) + max_delta_vy,
           state.vy.col(i - 1) - min_delta_vy);
 
-        state.vy.col(i) = state.cvy.col(i - 1)
+        state.cvy.col(i - 1) = state.cvy.col(i - 1)
           .cwiseMax(lower_bound_vy)
           .cwiseMin(upper_bound_vy);
+        state.vy.col(i) = state.cvy.col(i - 1);
       }
     }
   }
@@ -161,14 +164,10 @@ public:
    */
   void applyConstraints(models::ControlSequence & control_sequence) override
   {
-    const auto vx_ptr = control_sequence.vx.data();
-    auto wz_ptr = control_sequence.wz.data();
-    int steps = control_sequence.vx.size();
-    for(int i = 0; i < steps; i++) {
-      float wz_constrained = fabs(*(vx_ptr + i) / min_turning_r_);
-      float & wz_curr = *(wz_ptr + i);
-      wz_curr = utils::clamp(-1 * wz_constrained, wz_constrained, wz_curr);
-    }
+    const auto wz_constrained = control_sequence.vx.abs() / min_turning_r_;
+    control_sequence.wz = control_sequence.wz
+      .max((-wz_constrained))
+      .min(wz_constrained);
   }
 
   /**

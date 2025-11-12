@@ -190,13 +190,13 @@ protected:
    * @brief  Update velocities in state
    * @param state fill state with velocities on each step
    */
-  void updateStateVelocities(models::State & state) const;
+  void updateStateVelocities(models::State & state);
 
   /**
    * @brief  Update initial velocity in state
    * @param state fill state
    */
-  void updateInitialStateVelocities(models::State & state) const;
+  void updateInitialStateVelocities(models::State & state);
 
   /**
    * @brief predict velocities in state using model
@@ -280,6 +280,7 @@ protected:
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
+  Eigen::Array3f initial_velocities_;
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,

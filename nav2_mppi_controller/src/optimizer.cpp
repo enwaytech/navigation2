@@ -210,7 +210,6 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     }
   } while (fallback(critics_data_.fail_flag || !trajectory_valid));
 
-  utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
   auto control = getControlFromSequenceAsTwist(plan.header.stamp);
 
   if (settings_.shift_control_sequence) {
@@ -226,6 +225,7 @@ void Optimizer::optimize()
     generateNoisedTrajectories();
     critic_manager_.evalTrajectoriesScores(critics_data_);
     updateControlSequence();
+    generated_trajectories_.costs = costs_;
   }
 }
 
@@ -258,7 +258,7 @@ void Optimizer::prepare(
   state_.pose = robot_pose;
   state_.speed = robot_speed;
   path_ = utils::toTensor(plan);
-  costs_.setZero();
+  costs_.setZero(settings_.batch_size);
   goal_ = goal;
 
   critics_data_.fail_flag = false;
@@ -299,17 +299,17 @@ void Optimizer::applyControlSequenceConstraints()
   float max_delta_vy = s.model_dt * s.constraints.ay_max;
   float min_delta_vy = s.model_dt * s.constraints.ay_min;
   float max_delta_wz = s.model_dt * s.constraints.az_max;
-  float vx_last = utils::clamp(s.constraints.vx_min, s.constraints.vx_max, control_sequence_.vx(0));
-  float wz_last = utils::clamp(-s.constraints.wz, s.constraints.wz, control_sequence_.wz(0));
-  control_sequence_.vx(0) = vx_last;
-  control_sequence_.wz(0) = wz_last;
+
+  // limit acceleration between current initial_velocities_ and first control in the sequence
+  float vx_last = initial_velocities_(0);
+  float wz_last = initial_velocities_(2);
+
   float vy_last = 0;
   if (isHolonomic()) {
-    vy_last = utils::clamp(-s.constraints.vy, s.constraints.vy, control_sequence_.vy(0));
-    control_sequence_.vy(0) = vy_last;
+    vy_last = initial_velocities_(1);
   }
 
-  for (unsigned int i = 1; i != control_sequence_.vx.size(); i++) {
+  for (unsigned int i = 0; i != control_sequence_.vx.size(); i++) {
     float & vx_curr = control_sequence_.vx(i);
     vx_curr = utils::clamp(s.constraints.vx_min, s.constraints.vx_max, vx_curr);
     if(vx_last > 0) {
@@ -340,21 +340,25 @@ void Optimizer::applyControlSequenceConstraints()
 }
 
 void Optimizer::updateStateVelocities(
-  models::State & state) const
+  models::State & state)
 {
   updateInitialStateVelocities(state);
   propagateStateVelocitiesFromInitials(state);
 }
 
 void Optimizer::updateInitialStateVelocities(
-  models::State & state) const
+  models::State & state)
 {
-  state.vx.col(0) = static_cast<float>(state.speed.linear.x);
-  state.wz.col(0) = static_cast<float>(state.speed.angular.z);
+  state.vx.col(0) = control_sequence_.vx(0);
+  state.wz.col(0) = control_sequence_.wz(0);
 
   if (isHolonomic()) {
-    state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+    state.vy.col(0) = control_sequence_.vy(0);
   }
+
+  initial_velocities_(0) = control_sequence_.vx(0);
+  initial_velocities_(1) = control_sequence_.vy(0);
+  initial_velocities_(2) = control_sequence_.wz(0);
 }
 
 void Optimizer::propagateStateVelocitiesFromInitials(
@@ -514,19 +518,19 @@ void Optimizer::updateControlSequence()
     control_sequence_.vy = state_.cvy.transpose().matrix() * softmax_mat;
   }
 
+  utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
+
   applyControlSequenceConstraints();
 }
 
 geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   const builtin_interfaces::msg::Time & stamp)
 {
-  unsigned int offset = settings_.shift_control_sequence ? 1 : 0;
-
-  auto vx = control_sequence_.vx(offset);
-  auto wz = control_sequence_.wz(offset);
+  auto vx = control_sequence_.vx(0);
+  auto wz = control_sequence_.wz(0);
 
   if (isHolonomic()) {
-    auto vy = control_sequence_.vy(offset);
+    auto vy = control_sequence_.vy(0);
     return utils::toTwistStamped(vx, vy, wz, stamp, costmap_ros_->getBaseFrameID());
   }
 
