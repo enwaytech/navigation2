@@ -57,31 +57,35 @@ BehaviorTreeEngine::run(
   BT::NodeStatus result = BT::NodeStatus::RUNNING;
 
   // Loop until something happens with ROS or the node completes
-  try {
-    while (rclcpp::ok() && result == BT::NodeStatus::RUNNING) {
-      if (cancelRequested()) {
-        tree->haltTree();
-        return BtStatus::CANCELED;
-      }
-
-      result = tree->tickOnce();
-
-      onLoop();
-
-      if (!loopRate.sleep()) {
-        RCLCPP_DEBUG_THROTTLE(
-          rclcpp::get_logger("BehaviorTreeEngine"),
-          *clock_, 1000,
-          "Behavior Tree tick rate %0.2f was exceeded!",
-          1.0 / (loopRate.period().count() * 1.0e-9));
-      }
+  // try {
+  while (rclcpp::ok() && result == BT::NodeStatus::RUNNING)
+  {
+    if (cancelRequested())
+    {
+      tree->haltTree();
+      return BtStatus::CANCELED;
     }
-  } catch (const std::exception & ex) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("BehaviorTreeEngine"),
-      "Behavior tree threw exception: %s. Exiting with failure.", ex.what());
-    return BtStatus::FAILED;
+
+    result = tree->tickOnce();
+
+    onLoop();
+
+    if (!loopRate.sleep())
+    {
+      RCLCPP_DEBUG_THROTTLE(rclcpp::get_logger("BehaviorTreeEngine"),
+                            *clock_,
+                            1000,
+                            "Behavior Tree tick rate %0.2f was exceeded!",
+                            1.0 / (loopRate.period().count() * 1.0e-9));
+    }
   }
+  // } catch (const std::exception & ex) {
+  //   RCLCPP_ERROR(
+  //     rclcpp::get_logger("BehaviorTreeEngine"),
+  //     "Behavior tree threw exception: %s. Exiting with failure.", ex.what());
+  //   throw ex;
+  //   return BtStatus::FAILED;
+  // }
 
   return (result == BT::NodeStatus::SUCCESS) ? BtStatus::SUCCEEDED : BtStatus::FAILED;
 }

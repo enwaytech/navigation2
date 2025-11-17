@@ -15,12 +15,13 @@
 #ifndef NAV2_ROS_COMMON__SIMPLE_ACTION_SERVER_HPP_
 #define NAV2_ROS_COMMON__SIMPLE_ACTION_SERVER_HPP_
 
+#include <chrono>
+#include <execinfo.h>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <future>
-#include <chrono>
 #include <type_traits>
 
 #include "rclcpp/rclcpp.hpp"
@@ -81,7 +82,9 @@ public:
       node->get_node_parameters_interface(),
       action_name, execute_callback, completion_callback,
       server_timeout, spin_thread, realtime)
-  {}
+  {
+    work_future_ = work_promise_.get_future();
+  }
 
   /**
    * @brief An constructor for SimpleActionServer
@@ -233,11 +236,21 @@ public:
 
       // Return quickly to avoid blocking the executor, so spin up a new thread
       debug_msg("Executing goal asynchronously.");
-      execution_future_ = std::async(
-        std::launch::async, [this]() {
-          setSoftRealTimePriority();
-          work();
-        });
+      execution_future_ = std::async(std::launch::async,
+                                     [this]()
+                                     {
+                                       try
+                                       {
+                                         setSoftRealTimePriority();
+                                         work();
+                                         work_promise_.set_value();
+                                       }
+                                       catch (...)
+                                       {
+                                         work_promise_.set_exception(std::current_exception());
+                                         throw; // <--- important: GDB breaks here
+                                       }
+                                     });
     }
   }
 
@@ -250,22 +263,38 @@ public:
       debug_msg("Executing the goal...");
       try {
         execute_callback_();
-      } catch (std::exception & ex) {
-        RCLCPP_ERROR(
-          node_logging_interface_->get_logger(),
-          "Action server failed while executing action callback: \"%s\"", ex.what());
+      }
+      catch (std::exception& ex)
+      {
+        RCLCPP_ERROR(node_logging_interface_->get_logger(),
+                     "hmhmhmAction server failed while executing action callback: \"%s\"",
+                     ex.what());
+
+        // print backtrace
+        void* buffer[100];
+        int nptrs = backtrace(buffer, 100);
+        backtrace_symbols_fd(buffer, nptrs, STDERR_FILENO);
+
         terminate_all();
-        if (completion_callback_) {completion_callback_();}
-        return;
+        if (completion_callback_)
+        {
+          completion_callback_();
+        }
+        throw;
+        // return;
       }
 
       debug_msg("Blocking processing of new goal handles.");
       std::lock_guard<std::recursive_mutex> lock(update_mutex_);
 
-      if (stop_execution_) {
+      if (stop_execution_)
+      {
         warn_msg("Stopping the thread per request.");
         terminate_all();
-        if (completion_callback_) {completion_callback_();}
+        if (completion_callback_)
+        {
+          completion_callback_();
+        }
         break;
       }
 
@@ -524,6 +553,39 @@ public:
    */
   void publish_feedback(typename std::shared_ptr<typename ActionT::Feedback> feedback)
   {
+    // if (work_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    // {
+    //   // main thread observes the exception
+    //   try
+    //   {
+    //     work_future_.get(); // <--- will rethrow exception here
+    //   }
+    //   catch (const std::exception& ex)
+    //   {
+    //     RCLCPP_ERROR(node_logging_interface_->get_logger(), "Worker threw: %s", ex.what());
+    //     throw; // <--- gdb breaks here too
+    //   }
+    // }
+
+    if (execution_future_.valid())
+    {
+      try
+      {
+        execution_future_.get(); // <- exception is rethrown here
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_ERROR(node_logging_interface_->get_logger(), "Exception from async thread: %s", e.what());
+
+        // Optional: backtrace
+        void* buffer[100];
+        int nptrs = backtrace(buffer, 100);
+        backtrace_symbols_fd(buffer, nptrs, STDERR_FILENO);
+
+        throw; // Let GDB break here too
+      }
+    }
+
     if (!is_active(current_handle_)) {
       error_msg("Trying to publish feedback when the current goal handle is not active");
       return;
@@ -544,6 +606,8 @@ protected:
   ExecuteCallback execute_callback_;
   CompletionCallback completion_callback_;
   std::future<void> execution_future_;
+  std::promise<void> work_promise_;
+  std::future<void> work_future_;
   bool stop_execution_{false};
   bool use_realtime_prioritization_{false};
 
