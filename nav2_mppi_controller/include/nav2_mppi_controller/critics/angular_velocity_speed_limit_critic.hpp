@@ -1,0 +1,65 @@
+// Copyright (c) 2026 Enway GmbH, Georg Flick
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
+#define NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
+
+#include "nav2_mppi_controller/critic_function.hpp"
+#include "nav2_mppi_controller/models/state.hpp"
+#include "nav2_mppi_controller/tools/utils.hpp"
+
+namespace mppi::critics
+{
+
+/**
+ * @class mppi::critics::AngularVelocitySpeedLimitCritic
+ * @brief Critic objective function for limiting linear speed based on angular velocity
+ */
+class AngularVelocitySpeedLimitCritic : public CriticFunction
+{
+public:
+  /**
+    * @brief Initialize critic
+    */
+  void initialize() override;
+
+  /**
+   * @brief Penalize fast driving when turning
+   *
+   * The allowed speed depends on |wz|:
+   *  - Below min_angular_velocity: no constraint (deadband, treats as straight driving).
+   *  - Between min_angular_velocity and max_angular_velocity: allowed speed
+   *    decreases linearly from max_speed down to min_speed.
+   *  - Above max_angular_velocity: allowed speed is clamped at min_speed.
+   *
+   * Any speed above the resulting allowed_speed is penalized; speeds at or
+   * below it incur no cost.
+   *
+   * @param data CriticData with the sampled trajectory states; per-trajectory
+   *             cost is accumulated into data.costs.
+   */
+  void score(CriticData & data) override;
+
+protected:
+  float min_angular_velocity_{0};
+  float max_angular_velocity_{0};
+  float min_speed_{0};
+  float max_speed_{0};
+  float weight_{0};
+  unsigned int power_{0};
+};
+
+}  // namespace mppi::critics
+
+#endif  // NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_

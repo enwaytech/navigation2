@@ -49,5 +49,9 @@
       <description>mppi critic for penalizing changes in driving direction</description>
     </class>
 
+    <class type="mppi::critics::AngularVelocitySpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic for limiting linear velocity based on angular velocity</description>
+    </class>
+
   </library>
 </class_libraries>
