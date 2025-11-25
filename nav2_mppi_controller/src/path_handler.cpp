@@ -141,7 +141,8 @@ nav_msgs::msg::Path PathHandler::transformPath(
 
   if (transformed_plan.poses.empty()) {
     throw nav2_core::InvalidPath("Resulting plan has 0 poses in it, while global plan has "
-                                 + std::to_string(global_plan_.poses.size()) + " poses.");
+                                 + std::to_string(global_plan_.poses.size()) + " poses. lower_bound index: "
+                                 + std::to_string(lower_bound - global_plan_.poses.begin()));
   }
 
   return transformed_plan;
