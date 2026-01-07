@@ -119,6 +119,9 @@ void Optimizer::getParams()
   getParam(s.sampling_std.vx, "vx_std", 0.2f);
   getParam(s.sampling_std.vy, "vy_std", 0.2f);
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
+  getParam(s.compensate_control_delay, "compensate_control_delay", false);
+  getParam(s.steering_delay_duration, "steering_delay_duration", 0.0f);
+  getParam(s.speed_delay_duration, "speed_delay_duration", 0.0f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
   getParam(s.open_loop, "open_loop", false);
 
@@ -143,7 +146,8 @@ void Optimizer::getParams()
   s.constraints = s.base_constraints;
 
   setMotionModel(motion_model_name);
-  parameters_handler_->addPostCallback([this]() {reset();});
+  // Don't reset zone-based speed limits after params changes
+  parameters_handler_->addPostCallback([this]() {reset(false);});
 
   double controller_frequency;
   getParentParam(controller_frequency, "controller_frequency", 0.0, ParameterType::Static);
@@ -179,6 +183,7 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   control_history_[1] = {0.0f, 0.0f, 0.0f};
   control_history_[2] = {0.0f, 0.0f, 0.0f};
   control_history_[3] = {0.0f, 0.0f, 0.0f};
+  command_history_buffer_.clear();
 
   if (settings_.open_loop) {
     last_command_vel_ = geometry_msgs::msg::Twist();
@@ -329,6 +334,9 @@ void Optimizer::generateNoisedTrajectories()
 {
   noise_generator_.setNoisedControls(state_, control_sequence_);
   noise_generator_.generateNextNoises();
+
+  applyDelayCompensation(state_, rclcpp::Time(state_.pose.header.stamp));
+
   updateStateVelocities(state_);
   integrateStateVelocities(generated_trajectories_, state_);
 }
@@ -343,14 +351,23 @@ void Optimizer::applyControlSequenceConstraints()
   float min_delta_vy = s.model_dt * s.constraints.ay_min;
   float max_delta_wz = s.model_dt * s.constraints.az_max;
 
-  // limit acceleration between state.speed (current speed or last command, depends on open_loop)
-  // and first control in the sequence
-  float vx_last = static_cast<float>(state_.speed.linear.x);
-  float wz_last = static_cast<float>(state_.speed.angular.z);
-
+  // limit acceleration between current velocity and first control in the sequence
+  // When delay compensation is on, use the delay-compensated control sequence values;
+  // otherwise use state.speed (measured velocity or last_command_vel_ in open_loop mode)
+  float vx_last, wz_last;
   float vy_last = 0;
-  if (isHolonomic()) {
-    vy_last = static_cast<float>(state_.speed.linear.y);
+  if (settings_.compensate_control_delay) {
+    vx_last = control_sequence_.vx(0);
+    wz_last = control_sequence_.wz(0);
+    if (isHolonomic()) {
+      vy_last = control_sequence_.vy(0);
+    }
+  } else {
+    vx_last = static_cast<float>(state_.speed.linear.x);
+    wz_last = static_cast<float>(state_.speed.angular.z);
+    if (isHolonomic()) {
+      vy_last = static_cast<float>(state_.speed.linear.y);
+    }
   }
 
   for (unsigned int i = 0; i != control_sequence_.vx.size(); i++) {
@@ -392,11 +409,97 @@ void Optimizer::updateStateVelocities(
 
 void Optimizer::updateInitialStateVelocities(models::State & state) const
 {
-  state.vx.col(0) = static_cast<float>(state.speed.linear.x);
-  state.wz.col(0) = static_cast<float>(state.speed.angular.z);
+  if (settings_.compensate_control_delay) {
+    // Use the delay-compensated control sequence values (overridden by applyDelayCompensation)
+    state.vx.col(0) = control_sequence_.vx(0);
+    state.wz.col(0) = control_sequence_.wz(0);
 
-  if (isHolonomic()) {
-    state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+    if (isHolonomic()) {
+      state.vy.col(0) = control_sequence_.vy(0);
+    }
+  } else {
+    // Use state.speed which is already set to measured velocity or last_command_vel_ (open_loop)
+    state.vx.col(0) = static_cast<float>(state.speed.linear.x);
+    state.wz.col(0) = static_cast<float>(state.speed.angular.z);
+
+    if (isHolonomic()) {
+      state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+    }
+  }
+}
+
+void Optimizer::applyDelayCompensation(
+  models::State & state,
+  const rclcpp::Time & current_time)
+{
+  if (!settings_.compensate_control_delay || command_history_buffer_.empty()) {
+    return;
+  }
+
+  const bool apply_speed_delay = settings_.speed_delay_duration > 0.0f;
+  const bool apply_steering_delay = settings_.steering_delay_duration > 0.0f;
+
+  if (!apply_speed_delay && !apply_steering_delay) {
+    return;
+  }
+
+  const int speed_delay_steps = apply_speed_delay ? static_cast<int>(
+    std::ceil(settings_.speed_delay_duration / settings_.model_dt)) : 0;
+  const int steering_delay_steps = apply_steering_delay ? static_cast<int>(
+    std::ceil(settings_.steering_delay_duration / settings_.model_dt)) : 0;
+
+  const int max_steps = std::max(speed_delay_steps, steering_delay_steps);
+  const int steps_to_apply = std::min(
+    max_steps,
+    static_cast<int>(state.cvx.cols()));
+
+  for (int step = 0; step < steps_to_apply; step++) {
+    double step_time = step * settings_.model_dt;
+    const rclcpp::Time absolute_step_time = current_time + rclcpp::Duration::from_seconds(step_time);
+
+    // Apply speed delay (vx, vy)
+    if (apply_speed_delay && step < speed_delay_steps) {
+      const rclcpp::Time speed_execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.speed_delay_duration);
+
+      models::Control cmd_executed;
+      bool found_command {false};
+      for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
+        if (it->timestamp <= speed_execution_time) {
+          cmd_executed = it->control;
+          found_command = true;
+          break;
+        }
+      }
+
+      if (found_command) {
+        state.cvx.col(step) = cmd_executed.vx;
+        control_sequence_.vx(step) = cmd_executed.vx;
+        if (isHolonomic()) {
+          state.cvy.col(step) = cmd_executed.vy;
+          control_sequence_.vy(step) = cmd_executed.vy;
+        }
+      }
+    }
+
+    // Apply steering delay (wz)
+    if (apply_steering_delay && step < steering_delay_steps) {
+      const rclcpp::Time steering_execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.steering_delay_duration);
+
+      models::Control cmd_executed;
+      bool found_command {false};
+      for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
+        if (it->timestamp <= steering_execution_time) {
+          cmd_executed = it->control;
+          found_command = true;
+          break;
+        }
+      }
+
+      if (found_command) {
+        state.cwz.col(step) = cmd_executed.wz;
+        control_sequence_.wz(step) = cmd_executed.wz;
+      }
+    }
   }
 }
 
@@ -568,13 +671,55 @@ void Optimizer::updateControlSequence()
 geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   const builtin_interfaces::msg::Time & stamp)
 {
-  unsigned int offset = settings_.shift_control_sequence ? 1 : 0;
+  int speed_control_idx {0};
+  int steering_control_idx {0};
 
-  auto vx = control_sequence_.vx(offset);
-  auto wz = control_sequence_.wz(offset);
+  if (settings_.compensate_control_delay) {
+    if (settings_.speed_delay_duration > 0.0f) {
+      speed_control_idx = static_cast<int>(
+        std::ceil(settings_.speed_delay_duration / settings_.model_dt));
+      speed_control_idx = std::min(
+        speed_control_idx,
+        static_cast<int>(control_sequence_.vx.size()) - 1);
+    }
+
+    if (settings_.steering_delay_duration > 0.0f) {
+      steering_control_idx = static_cast<int>(
+        std::ceil(settings_.steering_delay_duration / settings_.model_dt));
+      steering_control_idx = std::min(
+        steering_control_idx,
+        static_cast<int>(control_sequence_.wz.size()) - 1);
+    }
+  }
+
+  auto vx = control_sequence_.vx(speed_control_idx);
+  auto wz = control_sequence_.wz(steering_control_idx);
+  auto vy = 0.0f;
 
   if (isHolonomic()) {
-    auto vy = control_sequence_.vy(offset);
+    vy = control_sequence_.vy(speed_control_idx);
+  }
+
+  if (settings_.compensate_control_delay) {
+    models::TimestampedControl timestamped_cmd;
+    timestamped_cmd.control = {vx, vy, wz};
+    timestamped_cmd.timestamp = rclcpp::Time(stamp);
+    command_history_buffer_.push_back(timestamped_cmd);
+
+    // Cleanup old commands from buffer
+    auto current_time = rclcpp::Time(stamp);
+    const auto max_delay = std::max(settings_.speed_delay_duration, settings_.steering_delay_duration);
+    for (auto it = command_history_buffer_.begin(); it != command_history_buffer_.end();) {
+      auto age = (current_time - it->timestamp).seconds();
+      if (age > max_delay) {
+        it = command_history_buffer_.erase(it);
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (isHolonomic()) {
     return utils::toTwistStamped(vx, vy, wz, stamp, costmap_ros_->getBaseFrameID());
   }
 
@@ -591,7 +736,7 @@ void Optimizer::setMotionModel(const std::string & model)
     motion_model_ = std::make_shared<AckermannMotionModel>(parameters_handler_, name_);
   } else {
     throw nav2_core::ControllerException(
-            std::string(
+                  std::string(
               "Model " + model + " is not valid! Valid options are DiffDrive, Omni, "
               "or Ackermann"));
   }

@@ -16,6 +16,7 @@
 #define NAV2_MPPI_CONTROLLER__MODELS__CONTROL_SEQUENCE_HPP_
 
 #include <Eigen/Dense>
+#include <rclcpp/rclcpp.hpp>
 
 namespace mppi::models
 {
@@ -27,6 +28,16 @@ namespace mppi::models
 struct Control
 {
   float vx, vy, wz;
+};
+
+/**
+ * @struct mppi::models::TimestampedControl
+ * @brief A control with timestamp
+ */
+struct TimestampedControl
+{
+  Control control;
+  rclcpp::Time timestamp;
 };
 
 /**
