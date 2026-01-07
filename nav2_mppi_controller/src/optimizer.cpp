@@ -119,6 +119,8 @@ void Optimizer::getParams()
   getParam(s.sampling_std.vx, "vx_std", 0.2f);
   getParam(s.sampling_std.vy, "vy_std", 0.2f);
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
+  getParam(s.compensate_control_delay, "compensate_control_delay", false);
+  getParam(s.control_delay_duration, "control_delay_duration", 0.0f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
   getParam(s.open_loop, "open_loop", false);
 
@@ -179,6 +181,7 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   control_history_[1] = {0.0f, 0.0f, 0.0f};
   control_history_[2] = {0.0f, 0.0f, 0.0f};
   control_history_[3] = {0.0f, 0.0f, 0.0f};
+  command_history_buffer_.clear();
 
   if (settings_.open_loop) {
     last_command_vel_ = geometry_msgs::msg::Twist();
@@ -329,6 +332,9 @@ void Optimizer::generateNoisedTrajectories()
 {
   noise_generator_.setNoisedControls(state_, control_sequence_);
   noise_generator_.generateNextNoises();
+
+  applyDelayCompensation(state_, rclcpp::Time(state_.pose.header.stamp));
+
   updateStateVelocities(state_);
   integrateStateVelocities(generated_trajectories_, state_);
 }
@@ -397,6 +403,56 @@ void Optimizer::updateInitialStateVelocities(models::State & state) const
 
   if (isHolonomic()) {
     state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+  }
+}
+
+void Optimizer::applyDelayCompensation(
+  models::State & state,
+  const rclcpp::Time & current_time)
+{
+  if (!settings_.compensate_control_delay || settings_.control_delay_duration <= 0.0f ||
+      command_history_buffer_.empty()) {
+    return;
+  }
+
+  const int delay_steps = static_cast<int>(
+    std::ceil(settings_.control_delay_duration / settings_.model_dt));
+
+  if (delay_steps <= 0) {
+    return;
+  }
+
+  const int steps_to_apply = std::min(
+    delay_steps,
+    static_cast<int>(state.cvx.cols()));
+
+  for (int step = 0; step < steps_to_apply; step++) {
+    double step_time = step * settings_.model_dt;
+    rclcpp::Time absolute_step_time = current_time + rclcpp::Duration::from_seconds(step_time);
+
+    rclcpp::Time execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.control_delay_duration);
+
+    // Find the most recent send command at execution time
+    models::Control cmd_executed;
+    bool found_command = false;
+    for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
+      if (it->timestamp <= execution_time) {
+        cmd_executed = it->control;
+        found_command = true;
+        break;
+      }
+    }
+
+    if (found_command) {
+      state.cvx.col(step) = cmd_executed.vx;
+      state.cwz.col(step) = cmd_executed.wz;
+      if (isHolonomic()) {
+        state.cvy.col(step) = cmd_executed.vy;
+      }
+    }
+    else {
+      cmd_executed = command_history_buffer_.front().control;
+    }
   }
 }
 
@@ -575,6 +631,43 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
 
   if (isHolonomic()) {
     auto vy = control_sequence_.vy(offset);
+  // Calculate which control index to use based on delay compensation
+  int control_index = 0;
+  if (settings_.compensate_control_delay) {
+    control_index = static_cast<int>(
+      std::ceil(settings_.control_delay_duration / settings_.model_dt));
+    control_index = std::min(
+      control_index,
+      static_cast<int>(control_sequence_.vx.size()) - 1);
+  }
+
+  auto vx = control_sequence_.vx(control_index);
+  auto wz = control_sequence_.wz(control_index);
+  auto vy = 0.0f;
+
+  if (isHolonomic()) {
+    vy = control_sequence_.vy(control_index);
+  }
+
+  // Store command in history buffer with timestamp
+  if (settings_.compensate_control_delay) {
+    models::TimestampedControl timestamped_cmd;
+    timestamped_cmd.control = {vx, vy, wz};
+    timestamped_cmd.timestamp = rclcpp::Time(stamp);
+    command_history_buffer_.push_back(timestamped_cmd);
+
+    auto current_time = rclcpp::Time(stamp);
+    while (!command_history_buffer_.empty()) {
+      auto age = (current_time - command_history_buffer_.front().timestamp).seconds();
+      if (age > settings_.control_delay_duration) {
+        command_history_buffer_.pop_front();
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (isHolonomic()) {
     return utils::toTwistStamped(vx, vy, wz, stamp, costmap_ros_->getBaseFrameID());
   }
 
