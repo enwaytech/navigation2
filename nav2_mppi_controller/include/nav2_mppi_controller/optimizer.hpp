@@ -20,6 +20,7 @@
 #include <string>
 #include <memory>
 #include <tuple>
+#include <deque>
 
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 
@@ -199,6 +200,15 @@ protected:
   void updateInitialStateVelocities(models::State & state);
 
   /**
+   * @brief Apply delay compensation to state velocities
+   * @param state State to apply delay compensation to
+   * @param current_time Current timestamp for calculating command ages
+   */
+  void applyDelayCompensation(
+    models::State & state,
+    const rclcpp::Time & current_time);
+
+  /**
    * @brief predict velocities in state using model
    * for time horizon equal to timesteps
    * @param state fill state
@@ -281,6 +291,7 @@ protected:
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
   Eigen::Array3f initial_velocities_;
+  std::deque<models::TimestampedControl> command_history_buffer_;
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,

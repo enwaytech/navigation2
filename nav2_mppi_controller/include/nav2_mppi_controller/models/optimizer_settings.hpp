@@ -38,6 +38,8 @@ struct OptimizerSettings
   unsigned int iteration_count{0u};
   bool shift_control_sequence{false};
   size_t retry_attempt_limit{0};
+  bool compensate_control_delay{false};
+  float control_delay_duration{0.0f};
 };
 
 }  // namespace mppi::models
