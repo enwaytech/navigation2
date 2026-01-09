@@ -38,6 +38,8 @@ struct State
   Eigen::ArrayXXf cvy;
   Eigen::ArrayXXf cwz;
 
+  Eigen::ArrayXXf steering_angle;  // Actual steering angle (rad) for Ackermann models
+
   geometry_msgs::msg::PoseStamped pose;
   geometry_msgs::msg::Twist speed;
 
@@ -53,6 +55,7 @@ struct State
     cvx.setZero(batch_size, time_steps);
     cvy.setZero(batch_size, time_steps);
     cwz.setZero(batch_size, time_steps);
+    steering_angle.setZero(batch_size, time_steps);
   }
 };
 }  // namespace mppi::models

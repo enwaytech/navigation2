@@ -65,6 +65,15 @@ void Optimizer::initialize(
     costmap_ros_, parameters_handler_, tf_buffer, settings_);
   RCLCPP_INFO(logger_, "Loaded trajectory validator plugin: %s", validator_plugin_type.c_str());
 
+  // Subscribe to /drive_state topic to get actual steering angles
+  drive_state_sub_ = node->create_subscription<enway_msgs::msg::FourWheelDriveStamped>(
+    "/drive_state",
+    [this](const enway_msgs::msg::FourWheelDriveStamped::SharedPtr msg) {
+      driveStateCallback(msg);
+    },
+    rclcpp::QoS(10));
+  RCLCPP_INFO(logger_, "Subscribed to /drive_state for actual steering angles");
+
   reset();
 }
 
@@ -181,6 +190,11 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
 bool Optimizer::isHolonomic() const
 {
   return motion_model_->isHolonomic();
+}
+
+void Optimizer::driveStateCallback(const enway_msgs::msg::FourWheelDriveStamped::SharedPtr msg)
+{
+  latest_drive_state_ = msg;
 }
 
 std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalControl(
@@ -361,6 +375,32 @@ void Optimizer::updateInitialStateVelocities(
 
   if (isHolonomic()) {
     state.vy.col(0) = control_sequence_.vy(0);
+  }
+
+  // Initialize steering angle from actual sensor data if available
+  if (state.steering_angle.size() > 0) {
+    float initial_steering = 0.0f;
+
+    if (latest_drive_state_) {
+      // Use actual front steering angle from /drive_state topic
+      initial_steering = latest_drive_state_->drive.front_steering_angle;
+      std::cout << "Using actual steering angle from /drive_state: " << initial_steering
+                << " rad" << std::endl;
+    } else {
+      // Fallback: estimate from current wz and vx
+      float current_vx = control_sequence_.vx(0);
+      float current_wz = control_sequence_.wz(0);
+
+      if (std::abs(current_vx) > 1e-3 && std::abs(current_wz) > 1e-6) {
+        constexpr float estimated_wheelbase = 1.64f;
+        initial_steering = std::atan((estimated_wheelbase * current_wz) / current_vx);
+      }
+      std::cout << "Warning: /drive_state not available, estimating steering angle: "
+                << initial_steering << " (vx: " << state.vx(0,0)
+                << ", wz: " << state.wz(0,0) << ")" << std::endl;
+    }
+
+    state.steering_angle.col(0) = initial_steering;
   }
 
   initial_velocities_(0) = control_sequence_.vx(0);

@@ -34,6 +34,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "enway_msgs/msg/four_wheel_drive_stamped.hpp"
 
 #include "nav2_mppi_controller/models/optimizer_settings.hpp"
 #include "nav2_mppi_controller/motion_models.hpp"
@@ -248,6 +249,12 @@ protected:
   getControlFromSequenceAsTwist(const builtin_interfaces::msg::Time & stamp);
 
   /**
+   * @brief Callback for /drive_state topic
+   * @param msg Drive state message with actual steering angles
+   */
+  void driveStateCallback(const enway_msgs::msg::FourWheelDriveStamped::SharedPtr msg);
+
+  /**
    * @brief Whether the motion model is holonomic
    * @return Bool if holonomic to populate `y` axis of state
    */
@@ -292,6 +299,8 @@ protected:
   Eigen::ArrayXf costs_;
   Eigen::Array3f initial_velocities_;
   std::deque<models::TimestampedControl> command_history_buffer_;
+  enway_msgs::msg::FourWheelDriveStamped::SharedPtr latest_drive_state_;
+  rclcpp::Subscription<enway_msgs::msg::FourWheelDriveStamped>::SharedPtr drive_state_sub_;
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,
