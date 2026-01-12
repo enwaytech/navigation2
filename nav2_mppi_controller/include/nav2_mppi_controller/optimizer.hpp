@@ -140,6 +140,12 @@ public:
     return settings_;
   }
 
+  /**
+   * @brief Set the current steering angle from vehicle feedback
+   * @param steering_angle Current front steering angle in radians
+   */
+  void setCurrentSteeringAngle(float steering_angle) { current_steering_angle_ = steering_angle; }
+
 protected:
   /**
    * @brief Main function to generate, score, and return trajectories
@@ -292,6 +298,7 @@ protected:
   Eigen::ArrayXf costs_;
   Eigen::Array3f initial_velocities_;
   std::deque<models::TimestampedControl> command_history_buffer_;
+  float current_steering_angle_{0.0f};
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,

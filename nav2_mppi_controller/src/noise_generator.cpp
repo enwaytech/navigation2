@@ -31,6 +31,7 @@ void NoiseGenerator::initialize(
   ndistribution_vx_ = std::normal_distribution(0.0f, settings_.sampling_std.vx);
   ndistribution_vy_ = std::normal_distribution(0.0f, settings_.sampling_std.vy);
   ndistribution_wz_ = std::normal_distribution(0.0f, settings_.sampling_std.wz);
+  ndistribution_sa_ = std::normal_distribution(0.0f, settings_.sampling_std.sa_velocity);
 
   auto getParam = param_handler->getParamGetter(name);
   getParam(regenerate_noises_, "regenerate_noises", false);
@@ -72,6 +73,9 @@ void NoiseGenerator::setNoisedControls(
   state.cvx = noises_vx_.rowwise() + control_sequence.vx.transpose();
   state.cvy = noises_vy_.rowwise() + control_sequence.vy.transpose();
   state.cwz = noises_wz_.rowwise() + control_sequence.wz.transpose();
+  // Note: steering angle velocity sampling is only used when enable_steering_dynamics=true
+  // For now, just use noise (proper reference computation needs motion model parameters)
+  state.csa = noises_sa_;
 }
 
 void NoiseGenerator::reset(mppi::models::OptimizerSettings & settings, bool is_holonomic)
@@ -85,6 +89,7 @@ void NoiseGenerator::reset(mppi::models::OptimizerSettings & settings, bool is_h
     noises_vx_.setZero(settings_.batch_size, settings_.time_steps);
     noises_vy_.setZero(settings_.batch_size, settings_.time_steps);
     noises_wz_.setZero(settings_.batch_size, settings_.time_steps);
+    noises_sa_.setZero(settings_.batch_size, settings_.time_steps);
     ready_ = true;
   }
 
@@ -112,6 +117,8 @@ void NoiseGenerator::generateNoisedControls()
     s.batch_size, s.time_steps, [&] () {return ndistribution_vx_(generator_);});
   noises_wz_ = Eigen::ArrayXXf::NullaryExpr(
     s.batch_size, s.time_steps, [&] () {return ndistribution_wz_(generator_);});
+  noises_sa_ = Eigen::ArrayXXf::NullaryExpr(
+    s.batch_size, s.time_steps, [&] () {return ndistribution_sa_(generator_);});
   if(is_holonomic_) {
     noises_vy_ = Eigen::ArrayXXf::NullaryExpr(
       s.batch_size, s.time_steps, [&] () {return ndistribution_vy_(generator_);});

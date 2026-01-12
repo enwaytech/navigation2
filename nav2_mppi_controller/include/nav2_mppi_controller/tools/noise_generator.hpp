@@ -98,11 +98,13 @@ protected:
   Eigen::ArrayXXf noises_vx_;
   Eigen::ArrayXXf noises_vy_;
   Eigen::ArrayXXf noises_wz_;
+  Eigen::ArrayXXf noises_sa_;  // steering angle noise
 
   std::default_random_engine generator_;
   std::normal_distribution<float> ndistribution_vx_;
   std::normal_distribution<float> ndistribution_wz_;
   std::normal_distribution<float> ndistribution_vy_;
+  std::normal_distribution<float> ndistribution_sa_;
 
   mppi::models::OptimizerSettings settings_;
   bool is_holonomic_;

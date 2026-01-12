@@ -20,6 +20,7 @@ find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(enway_msgs REQUIRED)
 
 include_directories(
   include
@@ -68,6 +69,7 @@ target_link_libraries(mppi_controller PUBLIC
   tf2_geometry_msgs::tf2_geometry_msgs
   tf2_ros::tf2_ros
   ${visualization_msgs_TARGETS}
+  ${enway_msgs_TARGETS}
 )
 
 add_library(mppi_critics SHARED

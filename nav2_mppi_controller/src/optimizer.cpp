@@ -95,9 +95,13 @@ void Optimizer::getParams()
   getParam(s.base_constraints.ay_max, "ay_max", 3.0f);
   getParam(s.base_constraints.ay_min, "ay_min", -3.0f);
   getParam(s.base_constraints.az_max, "az_max", 3.5f);
+  getParam(s.base_constraints.sa_max, "sa_max", 0.6f);  // ~34 degrees
+  getParam(s.base_constraints.sa_min, "sa_min", -0.6f);
+  getParam(s.base_constraints.sa_rate_max, "sa_rate_max", 1.0f);
   getParam(s.sampling_std.vx, "vx_std", 0.2f);
   getParam(s.sampling_std.vy, "vy_std", 0.2f);
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
+  getParam(s.sampling_std.sa_velocity, "sa_velocity_std", 0.5f);
   getParam(s.compensate_control_delay, "compensate_control_delay", false);
   getParam(s.control_delay_duration, "control_delay_duration", 0.0f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
@@ -116,6 +120,15 @@ void Optimizer::getParams()
       logger_,
       "Sign of the parameter ay_min is incorrect, consider setting it negative.");
   }
+
+  s.base_constraints.sa_max = fabs(s.base_constraints.sa_max);
+  if (s.base_constraints.sa_min > 0.0) {
+    s.base_constraints.sa_min = -1.0 * s.base_constraints.sa_min;
+    RCLCPP_WARN(
+      logger_,
+      "Sign of the parameter sa_min is incorrect, consider setting it negative.");
+  }
+  s.base_constraints.sa_rate_max = fabs(s.base_constraints.sa_rate_max);
 
 
   getParam(motion_model_name, "motion_model", std::string("DiffDrive"));
@@ -289,6 +302,8 @@ void Optimizer::shiftControlSequence()
 void Optimizer::generateNoisedTrajectories()
 {
   noise_generator_.setNoisedControls(state_, control_sequence_);
+  // TODO: Georg limit here?
+
   noise_generator_.generateNextNoises();
 
   applyDelayCompensation(state_, rclcpp::Time(state_.pose.header.stamp));
@@ -358,6 +373,7 @@ void Optimizer::updateInitialStateVelocities(
 {
   state.vx.col(0) = control_sequence_.vx(0);
   state.wz.col(0) = control_sequence_.wz(0);
+  state.sa.col(0) = current_steering_angle_;  // Initialize from actual vehicle steering angle
 
   if (isHolonomic()) {
     state.vy.col(0) = control_sequence_.vy(0);
@@ -428,6 +444,7 @@ void Optimizer::integrateStateVelocities(
   Eigen::Array<float, Eigen::Dynamic, 3> & trajectory,
   const Eigen::ArrayXXf & sequence) const
 {
+
   float initial_yaw = static_cast<float>(tf2::getYaw(state_.pose.pose.orientation));
 
   const auto vx = sequence.col(0);
@@ -437,11 +454,18 @@ void Optimizer::integrateStateVelocities(
   auto traj_y = trajectory.col(1);
   auto traj_yaws = trajectory.col(2);
 
+  // initial steering angle
+  // initial steering velocity
+  // steering velocity is clamped to max values
+  // sample over the steering velocities instead of angular velocities
+  // or sample over the steering angle positions?
+
   const size_t n_size = traj_yaws.size();
   if (n_size == 0) {
     return;
   }
 
+  // replace that with kinematics for ackermann drive
   float last_yaw = initial_yaw;
   for(size_t i = 0; i != n_size; i++) {
     last_yaw += wz(i) * settings_.model_dt;

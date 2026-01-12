@@ -33,6 +33,9 @@ struct ControlConstraints
   float ay_min;
   float ay_max;
   float az_max;
+  float sa_max;       // maximum steering angle (rad)
+  float sa_min;       // minimum steering angle (rad)
+  float sa_rate_max;  // maximum steering angle rate (rad/s)
 };
 
 /**
@@ -44,6 +47,7 @@ struct SamplingStd
   float vx;
   float vy;
   float wz;
+  float sa_velocity;  // steering angle velocity (rad/s)
 };
 
 }  // namespace mppi::models

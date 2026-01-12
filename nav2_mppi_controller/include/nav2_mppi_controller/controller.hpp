@@ -18,6 +18,7 @@
 #include <string>
 #include <memory>
 
+#include "enway_msgs/msg/four_wheel_drive_stamped.hpp"
 #include "nav2_mppi_controller/tools/path_handler.hpp"
 #include "nav2_mppi_controller/optimizer.hpp"
 #include "nav2_mppi_controller/tools/trajectory_visualizer.hpp"
@@ -126,6 +127,9 @@ protected:
 
   bool visualize_;
   bool publish_optimal_trajectory_;
+
+  rclcpp::Subscription<enway_msgs::msg::FourWheelDriveStamped>::SharedPtr drive_state_sub_;
+  float current_steering_angle_{0.0f};
 };
 
 }  // namespace nav2_mppi_controller

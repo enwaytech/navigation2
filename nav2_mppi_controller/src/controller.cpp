@@ -72,6 +72,15 @@ void MPPIController::activate()
   if (opt_traj_pub_) {
     opt_traj_pub_->on_activate();
   }
+
+  // Subscribe to drive_state to get actual steering angle
+  drive_state_sub_ = node->create_subscription<enway_msgs::msg::FourWheelDriveStamped>(
+    "/drive_state",
+    [this](const enway_msgs::msg::FourWheelDriveStamped::SharedPtr msg) {
+      current_steering_angle_ = msg->drive.front_steering_angle;
+    },
+    rclcpp::QoS(10));
+
   RCLCPP_INFO(logger_, "Activated MPPI Controller: %s", name_.c_str());
 }
 
@@ -81,6 +90,7 @@ void MPPIController::deactivate()
   if (opt_traj_pub_) {
     opt_traj_pub_->on_deactivate();
   }
+  drive_state_sub_.reset();
   RCLCPP_INFO(logger_, "Deactivated MPPI Controller: %s", name_.c_str());
 }
 
@@ -102,6 +112,9 @@ geometry_msgs::msg::TwistStamped MPPIController::computeVelocityCommands(
   geometry_msgs::msg::Pose goal = path_handler_.getTransformedGoal(robot_pose.header.stamp).pose;
 
   nav_msgs::msg::Path transformed_plan = path_handler_.transformPath(robot_pose);
+
+  // Set the current steering angle from drive_state feedback
+  optimizer_.setCurrentSteeringAngle(current_steering_angle_);
 
   nav2_costmap_2d::Costmap2D * costmap = costmap_ros_->getCostmap();
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> costmap_lock(*(costmap->getMutex()));

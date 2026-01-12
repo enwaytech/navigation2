@@ -77,6 +77,8 @@ public:
     float min_delta_vx = model_dt_ * control_constraints_.ax_min;
     float max_delta_vy = model_dt_ * control_constraints_.ay_max;
     float min_delta_vy = model_dt_ * control_constraints_.ay_min;
+
+    // Angular velocity constraints depend on steering angle
     float max_delta_wz = model_dt_ * control_constraints_.az_max;
 
     unsigned int n_cols = state.vx.cols();
@@ -130,7 +132,7 @@ public:
 protected:
   float model_dt_{0.0};
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    0.0f, 0.0f};
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 /**
@@ -147,6 +149,10 @@ public:
   {
     auto getParam = param_handler->getParamGetter(name + ".AckermannConstraints");
     getParam(min_turning_r_, "min_turning_r", 0.2);
+    getParam(max_steering_rate_, "max_steering_rate", 1.0);
+    getParam(enable_steering_dynamics_, "enable_steering_dynamics", false);
+    getParam(wheel_base_, "wheel_base", 1.84);
+    getParam(rear_front_steering_ratio_, "rear_front_steering_ratio", -0.6927708847951191);
   }
 
   /**
@@ -164,6 +170,7 @@ public:
    */
   void applyConstraints(models::ControlSequence & control_sequence) override
   {
+    // TODO: Georg apply constraints based on steering angle?
     const auto wz_constrained = control_sequence.vx.abs() / min_turning_r_;
     control_sequence.wz = control_sequence.wz
       .max((-wz_constrained))
@@ -176,8 +183,71 @@ public:
    */
   float getMinTurningRadius() {return min_turning_r_;}
 
+  /**
+   * @brief Predict vehicle velocities with steering angle dynamics
+   * @param state Contains control velocities and steering angles
+   */
+  void predict(models::State & state) override
+  {
+    if (!enable_steering_dynamics_) {
+      // Use default velocity-based prediction
+      MotionModel::predict(state);
+      return;
+    }
+
+    float max_delta_vx = model_dt_ * control_constraints_.ax_max;
+    float min_delta_vx = model_dt_ * control_constraints_.ax_min;
+
+    unsigned int n_cols = state.vx.cols();
+
+    for (unsigned int i = 1; i < n_cols; i++) {
+      // Apply velocity constraints
+      auto lower_bound_vx = (state.vx.col(i - 1) >
+        0).select(state.vx.col(i - 1) + min_delta_vx,
+        state.vx.col(i - 1) - max_delta_vx);
+      auto upper_bound_vx = (state.vx.col(i - 1) >
+        0).select(state.vx.col(i - 1) + max_delta_vx,
+        state.vx.col(i - 1) - min_delta_vx);
+
+      state.cvx.col(i - 1) = state.cvx.col(i - 1)
+        .cwiseMax(lower_bound_vx)
+        .cwiseMin(upper_bound_vx);
+      state.vx.col(i) = state.cvx.col(i - 1);
+
+      // Compute target steering angle from sampled angular velocity (cwz)
+      // From: wz = vx * tan(sa) * (1.0 - ratio) / wheel_base
+      // Solve for sa: tan(sa) = wz * wheel_base / (vx * (1.0 - ratio))
+      // Avoid division by zero
+      auto denominator = state.vx.col(i) * (1.0f - rear_front_steering_ratio_);
+      auto target_sa = (denominator.abs() > 0.01f).select(
+        (state.cwz.col(i - 1) * wheel_base_ / denominator).atan(),
+        state.sa.col(i - 1));  // Keep current angle if vx too small
+
+      // Compute required steering velocity to reach target, with noise from csa
+      auto desired_sa_velocity = ((target_sa - state.sa.col(i - 1)) / model_dt_ + state.csa.col(i - 1))
+        .cwiseMax(-max_steering_rate_)
+        .cwiseMin(max_steering_rate_)
+        .eval();
+
+      // Integrate: sa(t+1) = sa(t) + sa_velocity * dt
+      state.sa.col(i) = state.sa.col(i - 1) + desired_sa_velocity * model_dt_;
+
+      // Apply steering angle position constraints
+      state.sa.col(i) = state.sa.col(i)
+        .cwiseMax(control_constraints_.sa_min)
+        .cwiseMin(control_constraints_.sa_max);
+
+      // Compute actual angular velocity from constrained steering angle
+      state.wz.col(i) = state.vx.col(i) * state.sa.col(i).tan() * (1.0f - rear_front_steering_ratio_) / wheel_base_;
+    }
+  }
+
 private:
   float min_turning_r_{0};
+  float max_steering_rate_{1.0};
+  bool enable_steering_dynamics_{false};
+  float wheel_base_{1.84};
+  float rear_front_steering_ratio_{-0.6927708847951191};
 };
 
 /**
