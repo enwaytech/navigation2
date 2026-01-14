@@ -35,7 +35,6 @@ struct ControlConstraints
   float az_max;
   float sa_max;       // maximum steering angle (rad)
   float sa_min;       // minimum steering angle (rad)
-  float sa_rate_max;  // maximum steering angle rate (rad/s)
 };
 
 /**

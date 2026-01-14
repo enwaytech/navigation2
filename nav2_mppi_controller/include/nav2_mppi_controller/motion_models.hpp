@@ -132,7 +132,7 @@ public:
 protected:
   float model_dt_{0.0};
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 /**
@@ -150,6 +150,7 @@ public:
     auto getParam = param_handler->getParamGetter(name + ".AckermannConstraints");
     getParam(min_turning_r_, "min_turning_r", 0.2);
     getParam(max_steering_rate_, "max_steering_rate", 1.0);
+    getParam(max_steering_accel_, "max_steering_accel", 10.0);  // rad/s² - limits steering jerk
     getParam(enable_steering_dynamics_, "enable_steering_dynamics", false);
     getParam(wheel_base_, "wheel_base", 1.84);
     getParam(rear_front_steering_ratio_, "rear_front_steering_ratio", -0.6927708847951191);
@@ -225,6 +226,23 @@ public:
 
       // Compute required steering velocity to reach target, with noise from csa
       auto desired_sa_velocity = ((target_sa - state.sa.col(i - 1)) / model_dt_ + state.csa.col(i - 1))
+        .eval();
+
+      // Apply steering acceleration limits (limits how fast steering rate can change)
+      if (i > 1) {
+        // Calculate previous steering velocity
+        auto prev_sa_velocity = (state.sa.col(i - 1) - state.sa.col(i - 2)) / model_dt_;
+        auto max_delta_sa_velocity = max_steering_accel_ * model_dt_;
+
+        // Limit acceleration of steering
+        desired_sa_velocity = desired_sa_velocity
+          .cwiseMax(prev_sa_velocity - max_delta_sa_velocity)
+          .cwiseMin(prev_sa_velocity + max_delta_sa_velocity)
+          .eval();
+      }
+
+      // Apply steering rate limits
+      desired_sa_velocity = desired_sa_velocity
         .cwiseMax(-max_steering_rate_)
         .cwiseMin(max_steering_rate_)
         .eval();
@@ -244,7 +262,8 @@ public:
 
 private:
   float min_turning_r_{0};
-  float max_steering_rate_{1.0};
+  float max_steering_rate_{1.0};        // Maximum steering rate (rad/s)
+  float max_steering_accel_{10.0};      // Maximum steering acceleration (rad/s²)
   bool enable_steering_dynamics_{false};
   float wheel_base_{1.84};
   float rear_front_steering_ratio_{-0.6927708847951191};

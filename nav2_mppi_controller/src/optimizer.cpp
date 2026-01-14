@@ -97,7 +97,6 @@ void Optimizer::getParams()
   getParam(s.base_constraints.az_max, "az_max", 3.5f);
   getParam(s.base_constraints.sa_max, "sa_max", 0.6f);  // ~34 degrees
   getParam(s.base_constraints.sa_min, "sa_min", -0.6f);
-  getParam(s.base_constraints.sa_rate_max, "sa_rate_max", 1.0f);
   getParam(s.sampling_std.vx, "vx_std", 0.2f);
   getParam(s.sampling_std.vy, "vy_std", 0.2f);
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
@@ -128,8 +127,6 @@ void Optimizer::getParams()
       logger_,
       "Sign of the parameter sa_min is incorrect, consider setting it negative.");
   }
-  s.base_constraints.sa_rate_max = fabs(s.base_constraints.sa_rate_max);
-
 
   getParam(motion_model_name, "motion_model", std::string("DiffDrive"));
 
