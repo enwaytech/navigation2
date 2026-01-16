@@ -43,8 +43,9 @@ public:
   void score(CriticData & data) override;
 
 protected:
-  float angular_velocity_threshold_;
-  float max_speed_at_threshold_;
+  float max_angular_velocity_;
+  float max_speed_;
+  float min_speed_ratio_{0.3f};
   float weight_;
   unsigned int power_{2u};
 };
