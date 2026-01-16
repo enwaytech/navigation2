@@ -154,6 +154,8 @@ public:
     getParam(enable_steering_dynamics_, "enable_steering_dynamics", false);
     getParam(wheel_base_, "wheel_base", 1.84);
     getParam(rear_front_steering_ratio_, "rear_front_steering_ratio", -0.6927708847951191);
+    getParam(enable_speed_limiting_, "enable_speed_limiting", true);
+    getParam(min_speed_at_max_steer_, "min_speed_at_max_steer", 0.5);  // Minimum speed ratio at max steering angle
   }
 
   /**
@@ -219,10 +221,40 @@ public:
       // From: wz = vx * tan(sa) * (1.0 - ratio) / wheel_base
       // Solve for sa: tan(sa) = wz * wheel_base / (vx * (1.0 - ratio))
       // Avoid division by zero
-      auto denominator = state.vx.col(i) * (1.0f - rear_front_steering_ratio_);
-      auto target_sa = (denominator.abs() > 0.01f).select(
+      auto denominator = (state.vx.col(i) * (1.0f - rear_front_steering_ratio_)).eval();
+      auto target_sa = ((denominator.abs() > 0.01f).select(
         (state.cwz.col(i - 1) * wheel_base_ / denominator).atan(),
-        state.sa.col(i - 1));  // Keep current angle if vx too small
+        state.sa.col(i - 1))).eval();  // Evaluate to allow reassignment
+
+      // Apply steering-angle-based speed limiting if enabled
+      // Based on predicted steering angle to reduce speed in anticipated tight turns
+      if (enable_speed_limiting_) {
+        // Clamp target steering angle to valid range before using for speed calculation
+        auto clamped_target_sa = target_sa
+          .cwiseMax(control_constraints_.sa_min)
+          .cwiseMin(control_constraints_.sa_max)
+          .eval();
+
+        // Calculate normalized steering angle [0, 1] where 1 is max steering
+        auto normalized_sa = (clamped_target_sa.abs() / control_constraints_.sa_max).eval();
+        // Speed ratio: 1.0 at sa=0, min_speed_at_max_steer_ at sa=max
+        auto speed_ratio = (1.0f - normalized_sa * (1.0f - min_speed_at_max_steer_)).eval();
+
+        // Limit speed magnitude while preserving direction
+        auto vx_magnitude_limit = (control_constraints_.vx_max * speed_ratio).eval();
+
+        // Apply symmetric limits: clamp magnitude to scaled limit
+        state.vx.col(i) = (state.vx.col(i) > 0).select(
+          state.vx.col(i).cwiseMin(vx_magnitude_limit),
+          state.vx.col(i).cwiseMax(-vx_magnitude_limit)
+        ).eval();
+
+        // Recompute target steering angle with limited velocity
+        denominator = (state.vx.col(i) * (1.0f - rear_front_steering_ratio_)).eval();
+        target_sa = ((denominator.abs() > 0.01f).select(
+          (state.cwz.col(i - 1) * wheel_base_ / denominator).atan(),
+          state.sa.col(i - 1))).eval();
+      }
 
       // Compute required steering velocity to reach target, with noise from csa
       auto desired_sa_velocity = ((target_sa - state.sa.col(i - 1)) / model_dt_ + state.csa.col(i - 1))
@@ -267,6 +299,8 @@ private:
   bool enable_steering_dynamics_{false};
   float wheel_base_{1.84};
   float rear_front_steering_ratio_{-0.6927708847951191};
+  bool enable_speed_limiting_{true};   // Enable steering-angle-based speed limiting
+  float min_speed_at_max_steer_{0.3};   // Minimum speed ratio (0.0-1.0) at maximum steering angle
 };
 
 /**
