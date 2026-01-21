@@ -7,6 +7,7 @@ void AngularVelocitySpeedLimitCritic::initialize()
 {
   auto getParam = parameters_handler_->getParamGetter(name_);
 
+  getParam(min_angular_velocity_, "min_angular_velocity", 0.0f);
   getParam(max_angular_velocity_, "max_angular_velocity", 1.0f);
   getParam(max_speed_, "max_speed", 2.0f);
   getParam(min_speed_ratio_, "min_speed_ratio", 0.3f);
@@ -15,12 +16,15 @@ void AngularVelocitySpeedLimitCritic::initialize()
 
   RCLCPP_INFO(
     logger_,
-    "AngularVelocitySpeedLimitCritic instantiated with max_wz=%f, max_speed=%f, min_ratio=%f, weight=%f",
-    max_angular_velocity_, max_speed_, min_speed_ratio_, weight_);
+    "AngularVelocitySpeedLimitCritic instantiated with min_wz=%f, max_wz=%f, max_speed=%f, min_ratio=%f, weight=%f",
+    min_angular_velocity_, max_angular_velocity_, max_speed_, min_speed_ratio_, weight_);
 }
 
 void AngularVelocitySpeedLimitCritic::score(CriticData & data)
 {
+  if (!enabled_) {
+    return;
+  }
   auto & state = data.state;
   auto & costs = data.costs;
 
@@ -33,7 +37,9 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
     for (size_t t = 0; t < time_steps; ++t) {
       float vx = state.vx(i, t);
       float wz = std::abs(state.wz(i, t));
-
+      if (wz < min_angular_velocity_) {
+        continue;
+      }
       // Calculate allowed speed based on angular velocity
       // Linear interpolation: max_speed when wz=0, to min_speed_ratio*max_speed when wz=max_angular_velocity
       float wz_ratio = std::min(wz / max_angular_velocity_, 1.0f);
