@@ -43,6 +43,7 @@ public:
   void score(CriticData & data) override;
 
 protected:
+  float min_angular_velocity_;
   float max_angular_velocity_;
   float max_speed_;
   float min_speed_ratio_{0.3f};
