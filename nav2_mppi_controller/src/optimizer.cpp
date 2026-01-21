@@ -120,7 +120,8 @@ void Optimizer::getParams()
   getParam(s.sampling_std.vy, "vy_std", 0.2f);
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
   getParam(s.compensate_control_delay, "compensate_control_delay", false);
-  getParam(s.control_delay_duration, "control_delay_duration", 0.0f);
+  getParam(s.steering_delay_duration, "steering_delay_duration", 0.0f);
+  getParam(s.speed_delay_duration, "speed_delay_duration", 0.0f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
   getParam(s.open_loop, "open_loop", false);
 
@@ -410,48 +411,70 @@ void Optimizer::applyDelayCompensation(
   models::State & state,
   const rclcpp::Time & current_time)
 {
-  if (!settings_.compensate_control_delay || settings_.control_delay_duration <= 0.0f ||
-      command_history_buffer_.empty()) {
+  if (!settings_.compensate_control_delay || command_history_buffer_.empty()) {
     return;
   }
 
-  const int delay_steps = static_cast<int>(
-    std::ceil(settings_.control_delay_duration / settings_.model_dt));
+  const bool apply_speed_delay = settings_.speed_delay_duration > 0.0f;
+  const bool apply_steering_delay = settings_.steering_delay_duration > 0.0f;
 
-  if (delay_steps <= 0) {
+  if (!apply_speed_delay && !apply_steering_delay) {
     return;
   }
 
+  const int speed_delay_steps = apply_speed_delay ? static_cast<int>(
+    std::ceil(settings_.speed_delay_duration / settings_.model_dt)) : 0;
+  const int steering_delay_steps = apply_steering_delay ? static_cast<int>(
+    std::ceil(settings_.steering_delay_duration / settings_.model_dt)) : 0;
+
+  const int max_steps = std::max(speed_delay_steps, steering_delay_steps);
   const int steps_to_apply = std::min(
-    delay_steps,
+    max_steps,
     static_cast<int>(state.cvx.cols()));
 
   for (int step = 0; step < steps_to_apply; step++) {
     double step_time = step * settings_.model_dt;
     rclcpp::Time absolute_step_time = current_time + rclcpp::Duration::from_seconds(step_time);
 
-    rclcpp::Time execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.control_delay_duration);
+    // Apply speed delay (vx, vy)
+    if (apply_speed_delay && step < speed_delay_steps) {
+      rclcpp::Time speed_execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.speed_delay_duration);
 
-    // Find the most recent send command at execution time
-    models::Control cmd_executed;
-    bool found_command = false;
-    for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
-      if (it->timestamp <= execution_time) {
-        cmd_executed = it->control;
-        found_command = true;
-        break;
+      models::Control cmd_executed;
+      bool found_command = false;
+      for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
+        if (it->timestamp <= speed_execution_time) {
+          cmd_executed = it->control;
+          found_command = true;
+          break;
+        }
+      }
+
+      if (found_command) {
+        state.cvx.col(step) = cmd_executed.vx;
+        if (isHolonomic()) {
+          state.cvy.col(step) = cmd_executed.vy;
+        }
       }
     }
 
-    if (found_command) {
-      state.cvx.col(step) = cmd_executed.vx;
-      state.cwz.col(step) = cmd_executed.wz;
-      if (isHolonomic()) {
-        state.cvy.col(step) = cmd_executed.vy;
+    // Apply steering delay (wz)
+    if (apply_steering_delay && step < steering_delay_steps) {
+      rclcpp::Time steering_execution_time = absolute_step_time - rclcpp::Duration::from_seconds(settings_.steering_delay_duration);
+
+      models::Control cmd_executed;
+      bool found_command = false;
+      for (auto it = command_history_buffer_.rbegin(); it != command_history_buffer_.rend(); ++it) {
+        if (it->timestamp <= steering_execution_time) {
+          cmd_executed = it->control;
+          found_command = true;
+          break;
+        }
       }
-    }
-    else {
-      cmd_executed = command_history_buffer_.front().control;
+
+      if (found_command) {
+        state.cwz.col(step) = cmd_executed.wz;
+      }
     }
   }
 }
@@ -624,29 +647,34 @@ void Optimizer::updateControlSequence()
 geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   const builtin_interfaces::msg::Time & stamp)
 {
-  unsigned int offset = settings_.shift_control_sequence ? 1 : 0;
+  // Calculate which control indices to use based on delay compensation
+  int speed_control_index = 0;
+  int steering_control_index = 0;
 
-  auto vx = control_sequence_.vx(offset);
-  auto wz = control_sequence_.wz(offset);
-
-  if (isHolonomic()) {
-    auto vy = control_sequence_.vy(offset);
-  // Calculate which control index to use based on delay compensation
-  int control_index = 0;
   if (settings_.compensate_control_delay) {
-    control_index = static_cast<int>(
-      std::ceil(settings_.control_delay_duration / settings_.model_dt));
-    control_index = std::min(
-      control_index,
-      static_cast<int>(control_sequence_.vx.size()) - 1);
+    if (settings_.speed_delay_duration > 0.0f) {
+      speed_control_index = static_cast<int>(
+        std::ceil(settings_.speed_delay_duration / settings_.model_dt));
+      speed_control_index = std::min(
+        speed_control_index,
+        static_cast<int>(control_sequence_.vx.size()) - 1);
+    }
+
+    if (settings_.steering_delay_duration > 0.0f) {
+      steering_control_index = static_cast<int>(
+        std::ceil(settings_.steering_delay_duration / settings_.model_dt));
+      steering_control_index = std::min(
+        steering_control_index,
+        static_cast<int>(control_sequence_.wz.size()) - 1);
+    }
   }
 
-  auto vx = control_sequence_.vx(control_index);
-  auto wz = control_sequence_.wz(control_index);
+  auto vx = control_sequence_.vx(speed_control_index);
+  auto wz = control_sequence_.wz(steering_control_index);
   auto vy = 0.0f;
 
   if (isHolonomic()) {
-    vy = control_sequence_.vy(control_index);
+    vy = control_sequence_.vy(speed_control_index);
   }
 
   // Store command in history buffer with timestamp
@@ -657,9 +685,10 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
     command_history_buffer_.push_back(timestamped_cmd);
 
     auto current_time = rclcpp::Time(stamp);
+    const float max_delay = std::max(settings_.speed_delay_duration, settings_.steering_delay_duration);
     while (!command_history_buffer_.empty()) {
       auto age = (current_time - command_history_buffer_.front().timestamp).seconds();
-      if (age > settings_.control_delay_duration) {
+      if (age > max_delay) {
         command_history_buffer_.pop_front();
       } else {
         break;

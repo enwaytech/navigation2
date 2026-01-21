@@ -40,7 +40,8 @@ struct OptimizerSettings
   size_t retry_attempt_limit{0};
   bool open_loop{false};
   bool compensate_control_delay{false};
-  float control_delay_duration{0.0f};
+  float steering_delay_duration{0.0f};
+  float speed_delay_duration{0.0f};
 };
 
 }  // namespace mppi::models
