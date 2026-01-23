@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
-#define NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
+#ifndef NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
+#define NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
 
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -23,8 +23,8 @@ namespace mppi::critics
 {
 
 /**
- * @class mppi::critics::ConstraintCritic
- * @brief Critic objective function for driving towards goal orientation
+ * @class mppi::critics::AngularVelocitySpeedLimitCritic
+ * @brief Critic to limit angular velocity based on current linear speed
  */
 class AngularVelocitySpeedLimitCritic : public CriticFunction
 {
@@ -53,4 +53,4 @@ protected:
 
 }  // namespace mppi::critics
 
-#endif  // NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
+#endif  // NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_

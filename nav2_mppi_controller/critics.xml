@@ -1,5 +1,8 @@
 <class_libraries>
   <library path="mppi_critics">
+    <class type="mppi::critics::AngularVelocitySpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic for limiting angular velocity</description>
+    </class>
 
     <class type="mppi::critics::ObstaclesCritic" base_class_type="mppi::critics::CriticFunction">
       <description>mppi critic for obstacle avoidance</description>
@@ -43,10 +46,6 @@
 
     <class type="mppi::critics::VelocityDeadbandCritic" base_class_type="mppi::critics::CriticFunction">
       <description>mppi critic for restricting command velocities in deadband range</description>
-    </class>
-
-    <class type="mppi::critics::AngularVelocitySpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
-      <description>mppi critic for limiting angular velocity</description>
     </class>
 
   </library>

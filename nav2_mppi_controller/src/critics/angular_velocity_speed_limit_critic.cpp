@@ -41,19 +41,22 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
         continue;
       }
       // Calculate allowed speed based on angular velocity
-      // Linear interpolation: max_speed when wz=0, to min_speed_ratio*max_speed when wz=max_angular_velocity
-      float wz_ratio = std::min(wz / max_angular_velocity_, 1.0f);
-      float allowed_speed = max_speed_ * (1.0f - wz_ratio * (1.0f - min_speed_ratio_));
+      // Linear interpolation: max_speed at min_angular_velocity, to min_speed_ratio*max_speed at max_angular_velocity
+      float wz_normalized = (wz - min_angular_velocity_) / (max_angular_velocity_ - min_angular_velocity_); //, std::min( 0.0f);
+      float allowed_speed = max_speed_ * (1.0f - wz_normalized * (1.0f - min_speed_ratio_));
 
       float speed_violation = std::abs(vx) - allowed_speed;
+      if (speed_violation > 0.0f) {
+        costs[i] += weight_ * speed_violation; //std::pow(max_violation, power_);
+      }
       if (speed_violation > 0.0f) {
         max_violation = std::max(max_violation, speed_violation);
       }
     }
 
-    if (max_violation > 0.0f) {
-      costs[i] += weight_ * std::pow(max_violation, power_);
-    }
+    // if (max_violation > 0.0f) {
+    //   costs[i] += weight_ * std::pow(max_violation, power_);
+    // }
   }
 }
 
