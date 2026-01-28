@@ -49,6 +49,7 @@ protected:
   float min_speed_ratio_{0.3f};
   float weight_;
   unsigned int power_{2u};
+  bool punish_ackermann_constraints_{false};
 };
 
 }  // namespace mppi::critics
