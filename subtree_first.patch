@@ -1,0 +1,47 @@
+diff --git a/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml b/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
+index 3293b52df..9e5990a95 100644
+--- a/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
++++ b/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
+@@ -4,6 +4,26 @@
+    and it also has recovery actions specific to planning / control as well as general system issues.
+ -->
+ <root BTCPP_format="4" main_tree_to_execute="NavigateThroughPosesWReplanningAndRecovery">
++   <BehaviorTree ID="Subtree">
++    <RecoveryNode name="FollowPath"
++                  number_of_retries="1">
++      <FollowPath controller_id="{selected_controller}"
++                  path="{path}"
++                  goal_checker_id="{selected_goal_checker}"
++                  progress_checker_id="{selected_progress_checker}"
++                  path_handler_id="{selected_path_handler}"
++                  tracking_feedback="{tracking_feedback}"
++                  error_code_id="{follow_path_error_code}"
++                  error_msg="{follow_path_error_msg}"/>
++      <Sequence>
++        <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
++        <ClearEntireCostmap name="ClearLocalCostmap-Context"
++                            service_name="local_costmap/clear_entirely_local_costmap"/>
++      </Sequence>
++    </RecoveryNode>
++  </BehaviorTree>
++
++
+   <BehaviorTree ID="NavigateThroughPosesWReplanningAndRecovery">
+     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+       <PipelineSequence name="NavigateWithReplanning">
+@@ -24,13 +44,8 @@
+             </Sequence>
+           </RecoveryNode>
+         </RateController>
+-        <RecoveryNode number_of_retries="1" name="FollowPath">
+-          <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}" goal_checker_id="{selected_goal_checker}" progress_checker_id="{selected_progress_checker}" path_handler_id="{selected_path_handler}" tracking_feedback="{tracking_feedback}"/>
+-          <Sequence>
+-            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+-            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+-          </Sequence>
+-        </RecoveryNode>
++        <SubTree ID="Subtree"
++        _autoremap="true"/>
+       </PipelineSequence>
+       <Sequence>
+         <Fallback>
