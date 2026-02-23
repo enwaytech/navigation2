@@ -22,6 +22,13 @@ find_package(visualization_msgs REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+# Option to enable/disable OpenMP for benchmarking
+option(ENABLE_OPENMP "Enable OpenMP parallelization" ON)
+
+if(ENABLE_OPENMP)
+  find_package(OpenMP)
+endif()
+
 include_directories(
   include
   ${EIGEN3_INCLUDE_DIR}
@@ -70,6 +77,12 @@ target_link_libraries(mppi_controller PUBLIC
   tf2_ros::tf2_ros
   ${visualization_msgs_TARGETS}
 )
+if(ENABLE_OPENMP AND OpenMP_CXX_FOUND)
+  target_link_libraries(mppi_controller PUBLIC OpenMP::OpenMP_CXX)
+  message(STATUS "OpenMP enabled for nav2_mppi_controller")
+else()
+  message(STATUS "OpenMP disabled for nav2_mppi_controller")
+endif()
 
 add_library(mppi_critics SHARED
   src/critics/constraint_critic.cpp
@@ -114,6 +127,10 @@ target_link_libraries(mppi_critics PUBLIC
 target_link_libraries(mppi_critics PRIVATE
   pluginlib::pluginlib
 )
+if(ENABLE_OPENMP AND OpenMP_CXX_FOUND)
+  target_link_libraries(mppi_critics PUBLIC OpenMP::OpenMP_CXX)
+  message(STATUS "OpenMP enabled for mppi_critics")
+endif()
 
 add_library(mppi_trajectory_validators SHARED
   src/trajectory_validators/optimal_trajectory_validator.cpp

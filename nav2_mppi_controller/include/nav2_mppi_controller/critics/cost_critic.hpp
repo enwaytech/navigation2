@@ -144,6 +144,17 @@ protected:
   std::string inflation_layer_name_;
 
   unsigned int power_{0};
+
+  // Timing statistics (running totals)
+  size_t stats_count_{0};
+  long stats_sum_{0};
+  long stats_min_{0};
+  long stats_max_{0};
+
+  // Profiling breakdown
+  long profile_setup_sum_{0};
+  long profile_loop_sum_{0};
+  long profile_power_sum_{0};
 };
 
 }  // namespace mppi::critics

@@ -14,8 +14,13 @@
 // limitations under the License.
 
 #include <cmath>
+#include <chrono>
 #include "nav2_mppi_controller/critics/cost_critic.hpp"
 #include "nav2_core/controller_exceptions.hpp"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace mppi::critics
 {
@@ -79,6 +84,21 @@ void CostCritic::initialize()
     "Critic will collision check based on %s cost.",
     power_, critical_cost_, weight_, consider_footprint_ ?
     "footprint" : "circular");
+
+#ifdef _OPENMP
+  RCLCPP_INFO(logger_, "OpenMP enabled with max %d threads", omp_get_max_threads());
+#else
+  RCLCPP_WARN(logger_, "OpenMP NOT enabled - running single-threaded");
+#endif
+
+  // Initialize timing statistics
+  stats_count_ = 0;
+  stats_sum_ = 0;
+  stats_min_ = std::numeric_limits<long>::max();
+  stats_max_ = 0;
+  profile_setup_sum_ = 0;
+  profile_loop_sum_ = 0;
+  profile_power_sum_ = 0;
 }
 
 float CostCritic::findCircumscribedCost(
@@ -129,6 +149,8 @@ float CostCritic::findCircumscribedCost(
 
 void CostCritic::score(CriticData & data)
 {
+  auto start_time = std::chrono::high_resolution_clock::now();
+
   if (!enabled_) {
     return;
   }
@@ -174,7 +196,26 @@ void CostCritic::score(CriticData & data)
     data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
     Eigen::Stride<-1, -1>(outer_stride, 1));
 
+  auto setup_end = std::chrono::high_resolution_clock::now();
+  long setup_time = std::chrono::duration_cast<std::chrono::microseconds>(setup_end - start_time).count();
+
+#ifdef _OPENMP
+  int num_threads_used = 1;
+  int max_threads = omp_get_max_threads();
+
+  if (stats_count_ == 0) {
+    RCLCPP_INFO(logger_, "OpenMP: max=%d, rows=%d, in_parallel=%d, limit=%d",
+                max_threads, strided_traj_rows, omp_in_parallel(), omp_get_thread_limit());
+  }
+
+  #pragma omp parallel for schedule(dynamic, 16) num_threads(6)
+#endif
   for (int i = 0; i < strided_traj_rows; ++i) {
+#ifdef _OPENMP
+    if (i == 0) {
+      num_threads_used = omp_get_num_threads();
+    }
+#endif
     bool trajectory_collide = false;
     float pose_cost = 0.0f;
     float & traj_cost = repulsive_cost(i);
@@ -212,8 +253,18 @@ void CostCritic::score(CriticData & data)
       }
     }
 
+#ifdef _OPENMP
+    if (!trajectory_collide) {
+      #pragma omp atomic write
+      all_trajectories_collide = false;
+    }
+#else
     all_trajectories_collide &= trajectory_collide;
+#endif
   }
+
+  auto loop_end = std::chrono::high_resolution_clock::now();
+  long loop_time = std::chrono::duration_cast<std::chrono::microseconds>(loop_end - setup_end).count();
 
   if (power_ > 1u) {
     data.costs += (repulsive_cost *
@@ -222,7 +273,54 @@ void CostCritic::score(CriticData & data)
     data.costs += repulsive_cost * (weight_ / static_cast<float>(strided_traj_cols));
   }
 
+  auto power_end = std::chrono::high_resolution_clock::now();
+  long power_time = std::chrono::duration_cast<std::chrono::microseconds>(power_end - loop_end).count();
+
   data.fail_flag = all_trajectories_collide;
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+  long exec_time = duration.count();
+
+  // Update running statistics
+  stats_count_++;
+  stats_sum_ += exec_time;
+  if (exec_time < stats_min_) stats_min_ = exec_time;
+  if (exec_time > stats_max_) stats_max_ = exec_time;
+
+  // Accumulate profiling data
+  profile_setup_sum_ += setup_time;
+  profile_loop_sum_ += loop_time;
+  profile_power_sum_ += power_time;
+
+  // Report statistics every 100 executions
+  if (stats_count_ % 100 == 0) {
+    double avg = static_cast<double>(stats_sum_) / stats_count_;
+    double avg_setup = static_cast<double>(profile_setup_sum_) / stats_count_;
+    double avg_loop = static_cast<double>(profile_loop_sum_) / stats_count_;
+    double avg_power = static_cast<double>(profile_power_sum_) / stats_count_;
+    double setup_pct = (avg_setup / avg) * 100.0;
+    double loop_pct = (avg_loop / avg) * 100.0;
+    double power_pct = (avg_power / avg) * 100.0;
+
+#ifdef _OPENMP
+    RCLCPP_INFO(
+      logger_,
+      "CostCritic timing (%zu calls, %dx%d, %d threads): total=%.1f µs [min=%ld, max=%ld] | "
+      "setup=%.1f µs (%.1f%%) | loop=%.1f µs (%.1f%%) | power=%.1f µs (%.1f%%)",
+      stats_count_, strided_traj_rows, strided_traj_cols, num_threads_used,
+      avg, stats_min_, stats_max_,
+      avg_setup, setup_pct, avg_loop, loop_pct, avg_power, power_pct);
+#else
+    RCLCPP_INFO(
+      logger_,
+      "CostCritic timing (%zu calls, %dx%d, NO OMP): total=%.1f µs [min=%ld, max=%ld] | "
+      "setup=%.1f µs (%.1f%%) | loop=%.1f µs (%.1f%%) | power=%.1f µs (%.1f%%)",
+      stats_count_, strided_traj_rows, strided_traj_cols,
+      avg, stats_min_, stats_max_,
+      avg_setup, setup_pct, avg_loop, loop_pct, avg_power, power_pct);
+#endif
+  }
 }
 
 }  // namespace mppi::critics
