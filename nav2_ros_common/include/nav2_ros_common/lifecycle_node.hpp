@@ -94,6 +94,7 @@ public:
     RCLCPP_INFO(get_logger(), "Destroying");
 
     runCleanups();
+    destroyBond();
 
     if (rcl_preshutdown_cb_handle_) {
       rclcpp::Context::SharedPtr context = get_node_base_interface()->get_context();
@@ -344,10 +345,27 @@ public:
     if (bond_heartbeat_period > 0.0) {
       RCLCPP_INFO(get_logger(), "Creating bond (%s) to lifecycle manager.", this->get_name());
 
+      // Dedicated node + executor thread so heartbeat timers are immune to
+      // main executor starvation (e.g. during action goal handling).
+      bond_node_ = std::make_shared<rclcpp::Node>(
+        std::string(get_name()) + "_bond",
+        get_namespace(),
+        rclcpp::NodeOptions().use_global_arguments(false));
+
+      auto bond_executor =
+        std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+      bond_executor->add_node(bond_node_);
+      bond_thread_ = std::make_unique<nav2::NodeThread>(bond_executor);
+
+      // Timers/topics on the dedicated node; logging/params from the managed node.
       bond_ = std::make_shared<bond::Bond>(
         std::string("bond"),
         this->get_name(),
-        shared_from_this());
+        bond_node_->get_node_base_interface(),
+        get_node_logging_interface(),
+        get_node_parameters_interface(),
+        bond_node_->get_node_timers_interface(),
+        bond_node_->get_node_topics_interface());
 
       bond_->setHeartbeatPeriod(bond_heartbeat_period);
       bond_->setHeartbeatTimeout(4.0);
@@ -363,9 +381,13 @@ public:
     if (bond_heartbeat_period > 0.0) {
       RCLCPP_INFO(get_logger(), "Destroying bond (%s) to lifecycle manager.", this->get_name());
 
+      // Reset bond first so it can publish dead-status while executor is still live
       if (bond_) {
         bond_.reset();
       }
+      // Then stop the dedicated thread and node
+      bond_thread_.reset();
+      bond_node_.reset();
     }
   }
 
@@ -424,6 +446,8 @@ protected:
   // Connection to tell that server is still up
   std::unique_ptr<rclcpp::PreShutdownCallbackHandle> rcl_preshutdown_cb_handle_{nullptr};
   std::shared_ptr<bond::Bond> bond_{nullptr};
+  std::shared_ptr<rclcpp::Node> bond_node_{nullptr};
+  std::unique_ptr<nav2::NodeThread> bond_thread_{nullptr};
   double bond_heartbeat_period{0.1};
   rclcpp::TimerBase::SharedPtr autostart_timer_;
 
