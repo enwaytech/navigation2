@@ -269,6 +269,12 @@ protected:
   std::chrono::milliseconds service_timeout_;
   double bond_heartbeat_period_;
 
+  // Dedicated node + executor for bond heartbeat processing.
+  // Declared before bond_map_ so implicit destruction order is:
+  // bond_map_ first (bonds publish dead-status), then thread, then node.
+  std::shared_ptr<rclcpp::Node> bond_node_;
+  std::unique_ptr<nav2::NodeThread> bond_thread_;
+
   // A map of all nodes to check bond connection
   std::map<std::string, std::shared_ptr<bond::Bond>> bond_map_;
 

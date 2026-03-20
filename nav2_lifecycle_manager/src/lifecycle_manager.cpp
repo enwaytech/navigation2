@@ -101,6 +101,10 @@ LifecycleManager::~LifecycleManager()
 {
   RCLCPP_INFO(get_logger(), "Destroying %s", get_name());
   service_thread_.reset();
+  // Destroy bonds before their executor so they can publish dead-status
+  bond_map_.clear();
+  bond_thread_.reset();
+  bond_node_.reset();
 }
 
 void
@@ -268,8 +272,27 @@ LifecycleManager::createBondConnection(const std::string & node_name)
   const double timeout_s = timeout_ns / 1e9;
 
   if (bond_map_.find(node_name) == bond_map_.end() && bond_timeout_.count() > 0.0) {
+    // Dedicated node + executor so heartbeat reception is immune to
+    // main executor starvation (e.g. during service call handling).
+    if (!bond_node_) {
+      bond_node_ = std::make_shared<rclcpp::Node>(
+        std::string(get_name()) + "_bond",
+        get_namespace(),
+        rclcpp::NodeOptions().use_global_arguments(false));
+      auto bond_executor =
+        std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+      bond_executor->add_node(bond_node_);
+      bond_thread_ = std::make_unique<nav2::NodeThread>(bond_executor);
+    }
+
     bond_map_[node_name] =
-      std::make_shared<bond::Bond>("bond", node_name, shared_from_this());
+      std::make_shared<bond::Bond>(
+        "bond", node_name,
+        bond_node_->get_node_base_interface(),
+        get_node_logging_interface(),
+        get_node_parameters_interface(),
+        bond_node_->get_node_timers_interface(),
+        bond_node_->get_node_topics_interface());
     bond_map_[node_name]->setHeartbeatTimeout(timeout_s);
     bond_map_[node_name]->setHeartbeatPeriod(bond_heartbeat_period_);
     bond_map_[node_name]->start();
@@ -513,7 +536,10 @@ LifecycleManager::onRclPreshutdown()
   service_thread_.reset();
   node_names_.clear();
   node_map_.clear();
+  // Destroy bonds before their executor so they can publish dead-status
   bond_map_.clear();
+  bond_thread_.reset();
+  bond_node_.reset();
 }
 
 void
