@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "nav2_mppi_controller/tools/trajectory_visualizer.hpp"
+
+#include <algorithm>
 #include <memory>
 #include <vector>
-#include <algorithm>
-#include "nav2_mppi_controller/tools/trajectory_visualizer.hpp"
 
 namespace mppi
 {
