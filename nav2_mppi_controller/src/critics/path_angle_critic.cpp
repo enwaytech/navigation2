@@ -58,7 +58,7 @@ void PathAngleCritic::initialize()
     auto node = parent_.lock();
     if (node) {
       furthest_point_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
-      "PathAngleCritic/furthest_reached_path_point", 1);
+          "/critics/PathAngleCritic/furthest_reached_path_point", 1);
       furthest_point_pub_->on_activate();
     }
   }
