@@ -113,10 +113,11 @@ TEST(CriticManagerTests, BasicCriticOperations)
   geometry_msgs::msg::Pose goal;
   Eigen::ArrayXf costs;
   float model_dt = 0.1;
+  bool use_arc_length_path_progress = false;
   CriticData data =
   {state, generated_trajectories, path, goal, costs, std::nullopt, model_dt, false, nullptr,
     nullptr,
-    std::nullopt, std::nullopt};
+    std::nullopt, std::nullopt, use_arc_length_path_progress};
 
   data.fail_flag = true;
   EXPECT_FALSE(critic_manager.getDummyCriticScored());
