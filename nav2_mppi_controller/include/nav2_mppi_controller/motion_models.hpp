@@ -121,21 +121,33 @@ public:
     }
 
     // Apply model delay
-    if(model_delay_ == 0.0) {return;}
+    if (model_delay_ == 0.0) {return;}
     unsigned int offset = std::floor((model_delay_ / model_dt_) + 0.5);
+    if (offset == 0) {return;}
     auto state_copy = state;
-    for (unsigned int i = 0; i != state.vx.shape(0); i++) {
-      for (unsigned int j = 1; j != state.vx.shape(1); j++) {
-        // Keep the first value before delay (because we cannot do better)
-        if (j < offset) {
-          state.vx(i, j) = state_copy.vx(i, 0);
-          state.wz(i, j) = state_copy.wz(i, 0);
-          if (is_holo) {state.vy(i, j) = state_copy.vy(i, 0);}
-        } else { // move the command to express delay
-          state.vx(i, j) = state_copy.vx(i, j - offset);
-          state.wz(i, j) = state_copy.wz(i, j - offset);
-          if (is_holo) {state.vy(i, j) = state_copy.vy(i, j - offset);}
+    const Eigen::Index num_cols = state.vx.cols();
+
+    if (offset < static_cast<unsigned int>(num_cols)) {
+      // Keep the first value before delay (because we cannot do better)
+      if (offset > 1) {
+        state.vx.middleCols(1, offset - 1) = state_copy.vx.col(0).replicate(1, offset - 1);
+        state.wz.middleCols(1, offset - 1) = state_copy.wz.col(0).replicate(1, offset - 1);
+        if (is_holo) {
+          state.vy.middleCols(1, offset - 1) = state_copy.vy.col(0).replicate(1, offset - 1);
         }
+      }
+      // Move the command to express delay
+      state.vx.rightCols(num_cols - offset) = state_copy.vx.leftCols(num_cols - offset);
+      state.wz.rightCols(num_cols - offset) = state_copy.wz.leftCols(num_cols - offset);
+      if (is_holo) {
+        state.vy.rightCols(num_cols - offset) = state_copy.vy.leftCols(num_cols - offset);
+      }
+    } else {
+      // Offset exceeds trajectory length, fill all with initial value
+      state.vx.rightCols(num_cols - 1) = state_copy.vx.col(0).replicate(1, num_cols - 1);
+      state.wz.rightCols(num_cols - 1) = state_copy.wz.col(0).replicate(1, num_cols - 1);
+      if (is_holo) {
+        state.vy.rightCols(num_cols - 1) = state_copy.vy.col(0).replicate(1, num_cols - 1);
       }
     }
   }
