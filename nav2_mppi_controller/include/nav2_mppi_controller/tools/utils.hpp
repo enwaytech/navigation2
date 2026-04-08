@@ -297,10 +297,28 @@ inline size_t findPathFurthestReachedPoint(const CriticData & data)
   float min_distance_by_path = std::numeric_limits<float>::max();
   size_t n_rows = traj_x.rows();
   size_t n_cols = data.path.x.size();
+
+  const geometry_msgs::msg::Pose &robot_pose = data.state.pose.pose;
+  const float robot_yaw =
+      static_cast<float>(tf2::getYaw(robot_pose.orientation));
+
+  constexpr float yaw_diff_thresh = 175.0f * M_PIF / 180.0f;
+  size_t yaw_diff_max_idx = n_cols;
+  // std::vector<float> path_arc(n_cols, 0.0f);
+  for (size_t i = 1; i < n_cols; ++i) {
+    const float goal_yaw = data.path.yaws(i);
+    const float yaw_diff =
+        fabs(angles::shortest_angular_distance(robot_yaw, goal_yaw));
+    if (yaw_diff > yaw_diff_thresh) {
+      yaw_diff_max_idx = i + 1;
+      break;
+    }
+  }
+
   for (size_t i = 0; i != n_rows; i++) {
     min_id_by_path = 0;
     min_distance_by_path = std::numeric_limits<float>::max();
-    for (size_t j = 0; j != n_cols; j++) {
+    for (size_t j = 0; j != yaw_diff_max_idx; j++) {
       const float dx = data.path.x(j) - traj_x(i);
       const float dy = data.path.y(j) - traj_y(i);
       const float cur_dist = dx * dx + dy * dy;
