@@ -27,6 +27,7 @@ void DirectionChangeCritic::initialize()
   getParam(
     threshold_to_consider_,
     "threshold_to_consider", 0.5f);
+  getParam(min_robot_speed_, "min_robot_speed", 0.05f);
 
   RCLCPP_INFO(
     logger_, "DirectionChangeCritic instantiated with %d power and %f weight.", power_, weight_);
@@ -47,6 +48,12 @@ void DirectionChangeCritic::score(CriticData & data)
   // Use robot_speed from feedback, as it better represents the actual direction of motion
   constexpr size_t penalize_up_to_idx = 2;
   const float current_speed = data.state.robot_speed.linear.x;
+
+  if (std::fabs(current_speed) < min_robot_speed_)
+  {
+    return;
+  }
+
   // Process in-place using Eigen views to avoid allocations
   auto vx_view = data.state.vx.leftCols(penalize_up_to_idx);
 
