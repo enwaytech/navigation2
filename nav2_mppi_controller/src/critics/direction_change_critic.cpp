@@ -57,12 +57,26 @@ void DirectionChangeCritic::score(CriticData & data)
   // Process in-place using Eigen views to avoid allocations
   auto vx_view = data.state.vx.leftCols(penalize_up_to_idx);
 
-  if (power_ > 1u) {
-    data.costs += ((vx_view * current_speed < 0.0f).select(
-        (vx_view - current_speed).abs(), 0.0f).rowwise().sum() * weight_).pow(power_);
-  } else {
-    data.costs += (vx_view * current_speed < 0.0f).select(
-      (vx_view - current_speed).abs(), 0.0f).rowwise().sum() * weight_;
+  // Ensure a minimum cost when signs differ but the velocity difference is very
+  // small
+  constexpr float min_direction_change_cost = 0.1f;
+
+  if (power_ > 1u)
+  {
+    data.costs += ((vx_view * current_speed < 0.0f)
+                       .select((vx_view - current_speed).abs().max(min_direction_change_cost), 0.0f)
+                       .rowwise()
+                       .sum()
+                   * weight_)
+                      .pow(power_);
+  }
+  else
+  {
+    data.costs += (vx_view * current_speed < 0.0f)
+                      .select((vx_view - current_speed).abs().max(min_direction_change_cost), 0.0f)
+                      .rowwise()
+                      .sum()
+                  * weight_;
   }
 }
 
