@@ -297,6 +297,8 @@ void Optimizer::prepare(
 {
   state_.pose = robot_pose;
   state_.speed = settings_.open_loop ? last_command_vel_ : robot_speed;
+  state_.robot_speed = robot_speed;
+
   state_.local_path_length = nav2_util::geometry_utils::calculate_path_length(plan);
   path_ = utils::toTensor(plan);
   costs_.setZero(settings_.batch_size);
@@ -546,15 +548,16 @@ void Optimizer::updateControlSequence()
 
   auto costs_normalized = costs_ - costs_.minCoeff();
   const float inv_temp = 1.0f / s.temperature;
-  auto softmaxes = (-inv_temp * costs_normalized).exp().eval();
+  constexpr float kMaxExponent = 80.0f;
+  auto softmaxes = ((-inv_temp * costs_normalized).cwiseMax(-kMaxExponent)).exp().eval();
   softmaxes /= softmaxes.sum();
 
   auto softmax_mat = softmaxes.matrix();
-  control_sequence_.vx = state_.cvx.transpose().matrix() * softmax_mat;
-  control_sequence_.wz = state_.cwz.transpose().matrix() * softmax_mat;
+  control_sequence_.vx.matrix().noalias() = state_.cvx.transpose().matrix() * softmax_mat;
+  control_sequence_.wz.matrix().noalias() = state_.cwz.transpose().matrix() * softmax_mat;
 
   if (is_holo) {
-    control_sequence_.vy = state_.cvy.transpose().matrix() * softmax_mat;
+    control_sequence_.vy.matrix().noalias() = state_.cvy.transpose().matrix() * softmax_mat;
   }
 
   utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
