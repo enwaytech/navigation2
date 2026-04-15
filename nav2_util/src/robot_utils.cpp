@@ -59,14 +59,16 @@ bool transformPoseInTargetFrame(
   try {
     // First try without timeout for immediate transforms (most common case)
     if (tf_buffer.canTransform(target_frame, input_pose.header.frame_id,
-                               input_pose.header.stamp, tf2::Duration::zero())) {
+                               input_pose.header.stamp, tf2::Duration::zero()))
+    {
       transformed_pose = tf_buffer.transform(input_pose, target_frame, tf2::Duration::zero());
       return true;
     }
 
     // Try using latest available transform (time zero) as optimization
     if (tf_buffer.canTransform(target_frame, input_pose.header.frame_id,
-                               tf2::TimePointZero, tf2::Duration::zero())) {
+                               tf2::TimePointZero, tf2::Duration::zero()))
+    {
       // Create a copy with time zero for latest transform
       geometry_msgs::msg::PoseStamped latest_pose = input_pose;
       latest_pose.header.stamp = rclcpp::Time(0);
