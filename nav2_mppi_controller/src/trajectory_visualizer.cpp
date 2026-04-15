@@ -200,7 +200,9 @@ void TrajectoryVisualizer::createTrajectoryMarkers(
   for (size_t i = 0; i < n_rows; i += trajectory_step_) {
     sorted_costs.emplace_back(i, trajectories.costs(i));
   }
-  std::sort(sorted_costs.begin(), sorted_costs.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+  std::sort(sorted_costs.begin(), sorted_costs.end(), [](const auto & a, const auto & b) {
+      return a.second < b.second;
+    });
 
   const float step = 1.0f / static_cast<float>(sorted_costs.size());
   float color_component = 1.0f;
@@ -294,8 +296,7 @@ void TrajectoryVisualizer::visualize(
     add(optimal_trajectory, "Optimal Trajectory", stamp);
   }
 
-  if (publish_trajectories_with_total_cost_ || publish_trajectories_with_individual_cost_)
-  {
+  if (publish_trajectories_with_total_cost_ || publish_trajectories_with_individual_cost_) {
     add(candidate_trajectories, costs, critic_costs, stamp);
   }
 

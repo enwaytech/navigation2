@@ -49,8 +49,7 @@ void DirectionChangeCritic::score(CriticData & data)
   constexpr size_t penalize_up_to_idx = 2;
   const float current_speed = data.state.robot_speed.linear.x;
 
-  if (std::fabs(current_speed) < min_robot_speed_)
-  {
+  if (std::fabs(current_speed) < min_robot_speed_) {
     return;
   }
 
