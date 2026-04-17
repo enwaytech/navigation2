@@ -38,11 +38,14 @@ void TrajectoryVisualizer::on_configure(
   getParam(publish_optimal_footprints_, "publish_optimal_footprints", false);
   getParam(publish_optimal_trajectory_msg_, "publish_optimal_trajectory_msg", false);
   getParam(publish_optimal_path_, "publish_optimal_path", false);
+  getParam(delay_path_duration_, "delay_path_duration", 0.0f);
+  publish_delay_path_ = delay_path_duration_ > 0.0f;
   getParam(footprint_downsample_factor_, "footprint_downsample_factor", 3);
 
   trajectories_publisher_ =
     node->create_publisher<visualization_msgs::msg::MarkerArray>("~/candidate_trajectories");
   optimal_path_pub_ = node->create_publisher<nav_msgs::msg::Path>("~/optimal_path");
+  delay_path_pub_ = node->create_publisher<nav_msgs::msg::Path>("~/delay_path");
   optimal_footprints_pub_ = node->create_publisher<visualization_msgs::msg::MarkerArray>(
     "~/optimal_footprints");
   optimal_trajectory_msg_pub_ = node->create_publisher<nav2_msgs::msg::Trajectory>(
@@ -55,6 +58,7 @@ void TrajectoryVisualizer::on_cleanup()
 {
   trajectories_publisher_.reset();
   optimal_path_pub_.reset();
+  delay_path_pub_.reset();
   optimal_footprints_pub_.reset();
   optimal_trajectory_msg_pub_.reset();
 }
@@ -66,6 +70,9 @@ void TrajectoryVisualizer::on_activate()
   }
   if (optimal_path_pub_) {
     optimal_path_pub_->on_activate();
+  }
+  if (delay_path_pub_) {
+    delay_path_pub_->on_activate();
   }
   if (optimal_footprints_pub_) {
     optimal_footprints_pub_->on_activate();
@@ -82,6 +89,9 @@ void TrajectoryVisualizer::on_deactivate()
   }
   if (optimal_path_pub_) {
     optimal_path_pub_->on_deactivate();
+  }
+  if (delay_path_pub_) {
+    delay_path_pub_->on_deactivate();
   }
   if (optimal_footprints_pub_) {
     optimal_footprints_pub_->on_deactivate();
@@ -309,6 +319,34 @@ void TrajectoryVisualizer::visualize(
     optimal_path_pub_->get_subscription_count() > 0)
   {
     optimal_path_pub_->publish(std::move(optimal_path_));
+  }
+
+  // Publish delay path (portion predefined by steering delay)
+  if (publish_delay_path_ && delay_path_pub_ &&
+    delay_path_pub_->get_subscription_count() > 0 &&
+    optimal_trajectory.rows() > 0)
+  {
+    int delay_steps = static_cast<int>(
+      std::ceil(delay_path_duration_ / model_dt));
+    delay_steps = std::min(
+      delay_steps, static_cast<int>(optimal_trajectory.rows()));
+
+    auto delay_path = std::make_unique<nav_msgs::msg::Path>();
+    delay_path->header.stamp = stamp;
+    delay_path->header.frame_id = frame_id_;
+
+    for (int i = 0; i < delay_steps; ++i) {
+      geometry_msgs::msg::PoseStamped pose_stamped;
+      pose_stamped.header = delay_path->header;
+      pose_stamped.pose = utils::createPose(
+        optimal_trajectory(i, 0), optimal_trajectory(i, 1), 0.06);
+      tf2::Quaternion q;
+      q.setRPY(0., 0., optimal_trajectory(i, 2));
+      pose_stamped.pose.orientation = tf2::toMsg(q);
+      delay_path->poses.push_back(pose_stamped);
+    }
+
+    delay_path_pub_->publish(std::move(delay_path));
   }
 
   // Publish optimal footprints if enabled
