@@ -706,12 +706,15 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
     timestamped_cmd.timestamp = rclcpp::Time(stamp);
     command_history_buffer_.push_back(timestamped_cmd);
 
-    // Cleanup old commands from buffer
+    // Cleanup old commands from buffer. Keep one extra cycle beyond
+    // max_delay so applyDelayCompensation's oldest-step lookup still finds
+    // a command under small timing jitter between control cycles.
     auto current_time = rclcpp::Time(stamp);
     const auto max_delay = std::max(settings_.speed_delay_duration, settings_.steering_delay_duration);
+    const auto cleanup_threshold = max_delay + settings_.model_dt;
     for (auto it = command_history_buffer_.begin(); it != command_history_buffer_.end();) {
       auto age = (current_time - it->timestamp).seconds();
-      if (age > max_delay) {
+      if (age > cleanup_threshold) {
         it = command_history_buffer_.erase(it);
       } else {
         break;

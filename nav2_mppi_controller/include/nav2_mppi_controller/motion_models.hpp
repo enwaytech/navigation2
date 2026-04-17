@@ -93,7 +93,9 @@ public:
 
       state.cvx.col(i - 1) = state.cvx.col(i - 1)
         .cwiseMax(lower_bound_vx)
-        .cwiseMin(upper_bound_vx);
+        .cwiseMin(upper_bound_vx)
+        .cwiseMax(control_constraints_.vx_min)
+        .cwiseMin(control_constraints_.vx_max);
       state.vx.col(i) = state.cvx.col(i - 1);
 
       state.cwz.col(i - 1) = state.cwz.col(i - 1)
