@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Enway GmbH, Adi Vardi
+// Copyright (c) 2026 Enway GmbH, Georg Flick
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
-#define NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
+#ifndef NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
+#define NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
 
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -24,7 +24,7 @@ namespace mppi::critics
 
 /**
  * @class mppi::critics::AngularVelocitySpeedLimitCritic
- * @brief Critic objective function for limiting angular velocity based on speed
+ * @brief Critic objective function for limiting linear speed based on angular velocity
  */
 class AngularVelocitySpeedLimitCritic : public CriticFunction
 {
@@ -35,10 +35,15 @@ public:
   void initialize() override;
 
   /**
-   * @brief Evaluate cost related to robot orientation at goal pose
-   * (considered only if robot near last goal in current plan)
+   * @brief Penalize trajectories whose |vx| exceeds an envelope that shrinks
+   * with |wz|. The envelope is a linear interpolation between max_speed at
+   * |wz| = 0 and min_speed at |wz| >= max_angular_velocity, with a deadband
+   * below min_angular_velocity where no penalty is applied. Cost is summed
+   * per timestep so sustained over-envelope segments are penalized in
+   * proportion to their duration.
    *
-   * @param costs [out] add goal angle cost values to this tensor
+   * @param data CriticData with the sampled trajectory states; per-trajectory
+   *             cost is accumulated into data.costs.
    */
   void score(CriticData & data) override;
 
@@ -53,4 +58,4 @@ protected:
 
 }  // namespace mppi::critics
 
-#endif  // NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_HPP_
+#endif  // NAV2_MPPI_CONTROLLER__CRITICS__ANGULAR_VELOCITY_SPEED_LIMIT_CRITIC_HPP_
