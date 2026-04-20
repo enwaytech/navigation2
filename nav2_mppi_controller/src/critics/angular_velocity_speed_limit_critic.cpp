@@ -62,7 +62,6 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
   const size_t time_steps = state.vx.cols();
 
   for (size_t i = 0; i < batch_size; ++i) {
-    float max_violation = 0.0f;
     float wz_violation = 0.0f;
     for (size_t t = 0; t < time_steps; ++t) {
       float vx = state.vx(i, t);
@@ -84,11 +83,8 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
 
       float speed_violation = std::abs(vx) - allowed_speed;
       if (speed_violation > 0.0f) {
-        max_violation = std::max(max_violation, speed_violation);
+        costs[i] += weight_ * std::pow(speed_violation, power_);
       }
-    }
-    if (max_violation > 0.0f) {
-      costs[i] += weight_ * std::pow(max_violation, power_);
     }
     if (wz_violation > 0.0f && punish_ackermann_constraints_) {
       costs[i] += wz_violation;
