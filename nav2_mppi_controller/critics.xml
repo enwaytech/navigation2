@@ -50,7 +50,7 @@
     </class>
 
     <class type="mppi::critics::AngularVelocitySpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
-      <description>mppi critic for limiting angular velocity</description>
+      <description>mppi critic for limiting linear velocity based on angular velocity</description>
     </class>
 
   </library>

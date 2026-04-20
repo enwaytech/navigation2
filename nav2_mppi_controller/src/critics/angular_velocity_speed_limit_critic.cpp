@@ -1,3 +1,17 @@
+// Copyright (c) 2026 Enway GmbH, Georg Flick
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "nav2_mppi_controller/critics/angular_velocity_speed_limit_critic.hpp"
 
 namespace mppi::critics
@@ -12,7 +26,7 @@ void AngularVelocitySpeedLimitCritic::initialize()
   getParam(max_speed_, "max_speed", 2.0f);
   getParam(min_speed_, "min_speed", 0.6f);
   getParam(weight_, "cost_weight", 10.0f);
-  getParam(power_, "cost_power", 2);
+  getParam(power_, "cost_power", 2u);
 
   constexpr float kMinPositive = 1e-3f;
   if (max_angular_velocity_ <= 0.0f) {
@@ -45,28 +59,18 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
   auto & state = data.state;
   auto & costs = data.costs;
 
-  const size_t batch_size = state.vx.rows();
-  const size_t time_steps = state.vx.cols();
+  const auto wz = state.wz.abs();
+  const auto speed = (state.vx * state.vx + state.vy * state.vy).sqrt();
+  const auto wz_ratio = (wz / max_angular_velocity_).min(1.0f);
+  const auto allowed_speed = (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
+  const auto speed_violation = (speed - allowed_speed).max(0.0f);
+  const auto mask = (wz >= min_angular_velocity_).cast<float>();
 
-  for (size_t i = 0; i < batch_size; ++i) {
-    for (size_t t = 0; t < time_steps; ++t) {
-      float vx = state.vx(i, t);
-      float wz = std::abs(state.wz(i, t));
-
-      if (wz < min_angular_velocity_) {
-        continue;
-      }
-
-      // Linearly interpolate allowed speed from max_speed at wz=0
-      // to min_speed at wz>=max_angular_velocity.
-      float wz_ratio = std::min(wz / max_angular_velocity_, 1.0f);
-      float allowed_speed = (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
-
-      float speed_violation = std::abs(vx) - allowed_speed;
-      if (speed_violation > 0.0f) {
-        costs[i] += weight_ * std::pow(speed_violation, power_);
-      }
-    }
+  const auto per_traj = (mask * speed_violation * data.model_dt).rowwise().sum().eval();
+  if (power_ > 1u) {
+    costs += (per_traj * weight_).pow(power_).eval();
+  } else {
+    costs += (per_traj * weight_).eval();
   }
 }
 
