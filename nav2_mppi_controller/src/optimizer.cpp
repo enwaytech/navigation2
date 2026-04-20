@@ -351,14 +351,23 @@ void Optimizer::applyControlSequenceConstraints()
   float min_delta_vy = s.model_dt * s.constraints.ay_min;
   float max_delta_wz = s.model_dt * s.constraints.az_max;
 
-  // limit acceleration between state.speed (current speed or last command, depends on open_loop)
-  // and first control in the sequence
-  float vx_last = static_cast<float>(state_.speed.linear.x);
-  float wz_last = static_cast<float>(state_.speed.angular.z);
-
+  // limit acceleration between current velocity and first control in the sequence
+  // When delay compensation is on, use the delay-compensated control sequence values;
+  // otherwise use state.speed (measured velocity or last_command_vel_ in open_loop mode)
+  float vx_last, wz_last;
   float vy_last = 0;
-  if (isHolonomic()) {
-    vy_last = static_cast<float>(state_.speed.linear.y);
+  if (settings_.compensate_control_delay) {
+    vx_last = control_sequence_.vx(0);
+    wz_last = control_sequence_.wz(0);
+    if (isHolonomic()) {
+      vy_last = control_sequence_.vy(0);
+    }
+  } else {
+    vx_last = static_cast<float>(state_.speed.linear.x);
+    wz_last = static_cast<float>(state_.speed.angular.z);
+    if (isHolonomic()) {
+      vy_last = static_cast<float>(state_.speed.linear.y);
+    }
   }
 
   for (unsigned int i = 0; i != control_sequence_.vx.size(); i++) {
@@ -400,11 +409,22 @@ void Optimizer::updateStateVelocities(
 
 void Optimizer::updateInitialStateVelocities(models::State & state) const
 {
-  state.vx.col(0) = static_cast<float>(state.speed.linear.x);
-  state.wz.col(0) = static_cast<float>(state.speed.angular.z);
+  if (settings_.compensate_control_delay) {
+    // Use the delay-compensated control sequence values (overridden by applyDelayCompensation)
+    state.vx.col(0) = control_sequence_.vx(0);
+    state.wz.col(0) = control_sequence_.wz(0);
 
-  if (isHolonomic()) {
-    state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+    if (isHolonomic()) {
+      state.vy.col(0) = control_sequence_.vy(0);
+    }
+  } else {
+    // Use state.speed which is already set to measured velocity or last_command_vel_ (open_loop)
+    state.vx.col(0) = static_cast<float>(state.speed.linear.x);
+    state.wz.col(0) = static_cast<float>(state.speed.angular.z);
+
+    if (isHolonomic()) {
+      state.vy.col(0) = static_cast<float>(state.speed.linear.y);
+    }
   }
 }
 
@@ -453,8 +473,10 @@ void Optimizer::applyDelayCompensation(
 
       if (found_command) {
         state.cvx.col(step) = cmd_executed.vx;
+        control_sequence_.vx(step) = cmd_executed.vx;
         if (isHolonomic()) {
           state.cvy.col(step) = cmd_executed.vy;
+          control_sequence_.vy(step) = cmd_executed.vy;
         }
       }
     }
@@ -475,6 +497,7 @@ void Optimizer::applyDelayCompensation(
 
       if (found_command) {
         state.cwz.col(step) = cmd_executed.wz;
+        control_sequence_.wz(step) = cmd_executed.wz;
       }
     }
   }
@@ -650,16 +673,6 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
 {
   int speed_control_idx {0};
   int steering_control_idx {0};
-
-  if (settings_.compensate_control_delay) {
-    speed_control_idx = settings_.speed_delay_duration / settings_.model_dt;
-    speed_control_idx = std::min(speed_control_idx,
-      static_cast<int>(control_sequence_.vx.size()) - 1);
-
-    steering_control_idx = settings_.steering_delay_duration / settings_.model_dt;
-    steering_control_idx = std::min(steering_control_idx,
-      static_cast<int>(control_sequence_.wz.size()) - 1);
-  }
 
   if (settings_.compensate_control_delay) {
     if (settings_.speed_delay_duration > 0.0f) {

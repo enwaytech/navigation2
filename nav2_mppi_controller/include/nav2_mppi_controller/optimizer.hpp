@@ -321,7 +321,6 @@ protected:
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
-  Eigen::Array3f initial_velocities_;
   std::deque<models::TimestampedControl> command_history_buffer_;
 
   CriticData critics_data_ = {
