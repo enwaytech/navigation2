@@ -50,6 +50,7 @@ protected:
   float weight_;
   unsigned int power_{2u};
   bool punish_ackermann_constraints_{false};
+  float min_turning_radius_{1.0f};
 };
 
 }  // namespace mppi::critics

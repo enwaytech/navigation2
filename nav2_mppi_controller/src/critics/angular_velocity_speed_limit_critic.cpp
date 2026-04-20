@@ -14,6 +14,7 @@ void AngularVelocitySpeedLimitCritic::initialize()
   getParam(weight_, "cost_weight", 10.0f);
   getParam(power_, "cost_power", 1);
   getParam(punish_ackermann_constraints_, "punish_ackermann_constraints", false);
+  getParam(min_turning_radius_, "min_turning_radius", 1.0f);
 
   RCLCPP_INFO(
     logger_,
@@ -39,7 +40,7 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
       float vx = state.vx(i, t);
       float wz = std::abs(state.wz(i, t));
 
-      const auto wz_constrained = std::abs(vx) / 1.0f;
+      const auto wz_constrained = std::abs(vx) / min_turning_radius_;
       if (std::abs(wz) > std::abs(wz_constrained)) {
         wz_violation = 10000.0f;
       }
