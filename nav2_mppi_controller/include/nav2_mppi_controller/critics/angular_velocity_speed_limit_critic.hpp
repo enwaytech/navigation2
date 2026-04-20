@@ -46,11 +46,12 @@ protected:
   float min_angular_velocity_;
   float max_angular_velocity_;
   float max_speed_;
-  float min_speed_ratio_{0.3f};
+  float min_speed_{0.6f};
   float weight_;
   unsigned int power_{2u};
   bool punish_ackermann_constraints_{false};
   float min_turning_radius_{1.0f};
+  float ackermann_violation_cost_{10000.0f};
 };
 
 }  // namespace mppi::critics
