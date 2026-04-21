@@ -26,7 +26,7 @@ void AngularVelocitySpeedLimitCritic::initialize()
   getParam(max_speed_, "max_speed", 2.0f);
   getParam(min_speed_, "min_speed", 0.6f);
   getParam(weight_, "cost_weight", 10.0f);
-  getParam(power_, "cost_power", 2u);
+  getParam(power_, "cost_power", 1);
 
   constexpr float kMinPositive = 1e-3f;
   if (max_angular_velocity_ <= 0.0f) {
@@ -60,7 +60,7 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
   auto & costs = data.costs;
 
   const auto wz = state.wz.abs();
-  const auto speed = (state.vx * state.vx + state.vy * state.vy).sqrt();
+  const auto speed = (state.vx.square() + state.vy.square()).sqrt();
   const auto wz_ratio = (wz / max_angular_velocity_).min(1.0f);
   const auto allowed_speed = (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
   const auto speed_violation = (speed - allowed_speed).max(0.0f);
