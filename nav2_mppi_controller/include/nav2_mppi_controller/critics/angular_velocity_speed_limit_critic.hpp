@@ -48,12 +48,12 @@ public:
   void score(CriticData & data) override;
 
 protected:
-  float min_angular_velocity_;
-  float max_angular_velocity_;
-  float max_speed_;
-  float min_speed_{0.6f};
-  float weight_;
-  unsigned int power_{2u};
+  float min_angular_velocity_{0};
+  float max_angular_velocity_{0};
+  float max_speed_{0};
+  float min_speed_{0};
+  float weight_{0};
+  unsigned int power_{0};
 };
 
 }  // namespace mppi::critics
