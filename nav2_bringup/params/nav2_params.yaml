@@ -103,6 +103,7 @@ controller_server:
     path_handler_plugins: ["PathHandler"]
     use_realtime_priority: false
     speed_limit_topic: "speed_limit"
+    enable_stamped_cmd_vel: false
 
     # Progress checker parameters
     progress_checker:
@@ -424,6 +425,7 @@ smoother_server:
 
 behavior_server:
   ros__parameters:
+    enable_stamped_cmd_vel: false
     local_costmap_topic: local_costmap/costmap_raw
     global_costmap_topic: global_costmap/costmap_raw
     local_footprint_topic: local_costmap/published_footprint
@@ -493,6 +495,7 @@ route_server:
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 20.0
+    enable_stamped_cmd_vel: false
     scale_velocities: false
     feedback: "OPEN_LOOP"
     max_velocity: [0.5, 0.0, 2.0]
@@ -506,6 +509,7 @@ velocity_smoother:
 
 collision_monitor:
   ros__parameters:
+    enable_stamped_cmd_vel: false
     enabled: true
     base_frame_id: "base_footprint"
     odom_frame_id: "odom"
@@ -538,6 +542,7 @@ collision_monitor:
 
 docking_server:
   ros__parameters:
+    enable_stamped_cmd_vel: false
     controller_frequency: 50.0
     initial_perception_timeout: 5.0
     wait_charge_timeout: 5.0
@@ -603,3 +608,4 @@ loopback_simulator:
     scan_angle_max: 3.1415
     scan_angle_increment: 0.02617
     scan_use_inf: true
+    enable_stamped_cmd_vel: false
