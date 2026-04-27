@@ -153,6 +153,13 @@ public:
   {
     auto getParam = param_handler->getParamGetter(name + ".AckermannConstraints");
     getParam(min_turning_r_, "min_turning_r", 0.2);
+    // Optional steering-rate-aware constraint. When both wheel_base and
+    // max_steering_angle_velocity are positive, |Δwz/dt| is clamped
+    // per-timestep based on the achievable steering angle velocity:
+    //   |dwz/dt|_max = max_steering_angle_velocity * |vx| / wheel_base
+    // (small-angle approximation; exact form would include sec²(δ))
+    getParam(wheel_base_, "wheel_base", 0.0f);
+    getParam(max_steering_angle_velocity_, "max_steering_angle_velocity", 0.0f);
   }
 
   /**
@@ -165,15 +172,84 @@ public:
   }
 
   /**
+   * @brief Predict next state, with steering-rate-aware wz rate limit.
+   * Replaces the base class az_max-based wz constraint with a state-dependent
+   * limit derived from the steering actuator's max angular velocity.
+   * Falls back to the base implementation if either param is unset.
+   */
+  void predict(models::State & state) override
+  {
+    if (wheel_base_ <= 0.0f || max_steering_angle_velocity_ <= 0.0f) {
+      MotionModel::predict(state);
+      return;
+    }
+
+    float max_delta_vx = model_dt_ * control_constraints_.ax_max;
+    float min_delta_vx = model_dt_ * control_constraints_.ax_min;
+
+    unsigned int n_cols = state.vx.cols();
+
+    for (unsigned int i = 1; i < n_cols; i++) {
+      auto lower_bound_vx = (state.vx.col(i - 1) > 0).select(
+        state.vx.col(i - 1) + min_delta_vx,
+        state.vx.col(i - 1) - max_delta_vx);
+      auto upper_bound_vx = (state.vx.col(i - 1) > 0).select(
+        state.vx.col(i - 1) + max_delta_vx,
+        state.vx.col(i - 1) - min_delta_vx);
+
+      state.cvx.col(i - 1) = state.cvx.col(i - 1)
+        .cwiseMax(lower_bound_vx)
+        .cwiseMin(upper_bound_vx)
+        .cwiseMax(control_constraints_.vx_min)
+        .cwiseMin(control_constraints_.vx_max);
+      state.vx.col(i) = state.cvx.col(i - 1);
+
+      // State-dependent wz rate limit including sec²(δ) factor:
+      //   |dwz/dt|_max = (|vx|/L) × sec²(δ) × max_steering_velocity
+      //   sec²(δ) = 1 + (wz × L / vx)²    (since tan(δ) = wz × L / vx)
+      // This is tight at δ=0 and loosens with steering angle, matching the real
+      // achievable wz acceleration.
+      const float k = max_steering_angle_velocity_ * model_dt_ / wheel_base_;
+      auto vx_abs = state.vx.col(i - 1).abs();
+      auto vx_safe = vx_abs.cwiseMax(0.01f);  // floor to avoid div-by-zero
+      auto wzL_over_vx = state.wz.col(i - 1) * wheel_base_ / vx_safe;
+      auto sec_sq = 1.0f + wzL_over_vx.square();
+      auto max_delta_wz_vec = (vx_abs * sec_sq * k).eval();
+
+      state.cwz.col(i - 1) = state.cwz.col(i - 1)
+        .cwiseMax(state.wz.col(i - 1) - max_delta_wz_vec)
+        .cwiseMin(state.wz.col(i - 1) + max_delta_wz_vec);
+      state.wz.col(i) = state.cwz.col(i - 1);
+    }
+  }
+
+  /**
    * @brief Apply hard vehicle constraints to a control sequence
    * @param control_sequence Control sequence to apply constraints to
    */
   void applyConstraints(models::ControlSequence & control_sequence) override
   {
+    // Geometric constraint: |wz| <= |vx| / min_turning_r
     const auto wz_constrained = control_sequence.vx.abs() / min_turning_r_;
     control_sequence.wz = control_sequence.wz
       .max((-wz_constrained))
       .min(wz_constrained);
+
+    // State-dependent rate limit with sec²(δ) factor:
+    //   |Δwz| <= |vx| × (1 + (wz×L/vx)²) × max_steering_velocity × dt / L
+    if (wheel_base_ > 0.0f && max_steering_angle_velocity_ > 0.0f) {
+      const float k = max_steering_angle_velocity_ * model_dt_ / wheel_base_;
+      for (Eigen::Index i = 1; i < control_sequence.wz.size(); ++i) {
+        const float vx_abs = std::abs(control_sequence.vx(i - 1));
+        const float vx_safe = std::max(vx_abs, 0.01f);
+        const float wzL_over_vx = control_sequence.wz(i - 1) * wheel_base_ / vx_safe;
+        const float sec_sq = 1.0f + wzL_over_vx * wzL_over_vx;
+        const float max_dwz = vx_abs * sec_sq * k;
+        const float lo = control_sequence.wz(i - 1) - max_dwz;
+        const float hi = control_sequence.wz(i - 1) + max_dwz;
+        control_sequence.wz(i) = std::clamp(control_sequence.wz(i), lo, hi);
+      }
+    }
   }
 
   /**
@@ -184,6 +260,8 @@ public:
 
 private:
   float min_turning_r_{0};
+  float wheel_base_{0};
+  float max_steering_angle_velocity_{0};
 };
 
 /**
