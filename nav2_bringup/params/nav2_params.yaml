@@ -72,7 +72,8 @@ bt_navigator:
     # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
     # Built-in plugins are added automatically
     # plugin_lib_names: []
-
+    default_nav_to_pose_bt_xml: "$(find-pkg-share nav2_bt_navigator)/behavior_trees/navigate_w_replanning_only_if_goal_is_updated.xml"
+    always_reload_bt_xml: true
     error_code_name_prefixes:
       - assisted_teleop
       - backup
@@ -156,13 +157,13 @@ controller_server:
       Visualization:
         publish_critics_stats: false
         publish_optimal_trajectory_msg: false
-        publish_transformed_path: false
+        publish_transformed_path: true
         publish_trajectories_with_total_cost: false
-        publish_trajectories_with_individual_cost: false
+        publish_trajectories_with_individual_cost: true
         publish_optimal_footprints: false
-        publish_optimal_path: false
-        trajectory_step: 5
-        time_step: 3
+        publish_optimal_path: true
+        trajectory_step: 10
+        time_step: 5
         footprint_downsample_factor: 3
       TrajectoryValidator:
         # The validator can be configured with additional parameters if needed.
@@ -220,6 +221,8 @@ controller_server:
         threshold_to_consider: 0.5
         offset_from_furthest: 20
         use_path_orientations: false
+        visualize_furthest_point: true
+        visualize_occupancy_check_distance: true
       PathFollowCritic:
         enabled: true
         cost_power: 1
@@ -249,7 +252,11 @@ local_costmap:
       rolling_window: true
       width: 3
       height: 3
+      # width: 10
+      # height: 10
       resolution: 0.05
+      # footprint: "[ [0.725, 0.525], [0.725, -0.525], [-0.725, -0.525], [-0.725, 0.525] ]"
+      # footprint_padding: 0.12
       robot_radius: 0.22
       plugins: ["voxel_layer", "inflation_layer"]
       filters: ["keepout_filter"]
@@ -262,6 +269,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
+        # inflation_radius: 2.0
         inflation_radius: 0.70
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
@@ -302,6 +310,8 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
+      # footprint: "[ [0.725, 0.525], [0.725, -0.525], [-0.725, -0.525], [-0.725, 0.525] ]"
+      # footprint_padding: 0.12
       robot_radius: 0.22
       resolution: 0.05
       track_unknown_space: true
@@ -344,7 +354,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.7
+        # inflation_radius: 1.2
+        inflation_radius: 0.70
       always_send_full_costmap: true
       introspection_mode: "disabled"
 
