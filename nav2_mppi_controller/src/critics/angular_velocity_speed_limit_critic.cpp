@@ -30,25 +30,28 @@ void AngularVelocitySpeedLimitCritic::initialize()
 
   constexpr float kMinPositive = 1e-3f;
   if (max_angular_velocity_ <= 0.0f) {
-    RCLCPP_WARN(
+    RCLCPP_WARN_STREAM(
       logger_,
-      "max_angular_velocity must be > 0, got %f — clamping to %f",
-      max_angular_velocity_, kMinPositive);
+      "max_angular_velocity must be > 0, got " << max_angular_velocity_ << " — clamping to " <<
+        kMinPositive);
     max_angular_velocity_ = kMinPositive;
   }
   if (min_speed_ > max_speed_) {
-    RCLCPP_WARN(
+    RCLCPP_WARN_STREAM(
       logger_,
-      "min_speed (%f) must be <= max_speed (%f) — clamping min_speed to max_speed",
-      min_speed_, max_speed_);
+      "min_speed (" << min_speed_ << ") must be <= max_speed (" << max_speed_ <<
+        ") — clamping min_speed to max_speed");
     min_speed_ = max_speed_;
   }
 
-  RCLCPP_INFO(
+  RCLCPP_INFO_STREAM(
     logger_,
-    "AngularVelocitySpeedLimitCritic instantiated with min_wz=%f, max_wz=%f, "
-    "max_speed=%f, min_speed=%f, weight=%f",
-    min_angular_velocity_, max_angular_velocity_, max_speed_, min_speed_, weight_);
+    "AngularVelocitySpeedLimitCritic instantiated with min_wz=" << min_angular_velocity_
+                                                                << ", max_wz=" <<
+      max_angular_velocity_
+                                                                << ", max_speed=" << max_speed_
+                                                                << ", min_speed=" << min_speed_
+                                                                << ", weight=" << weight_);
 }
 
 void AngularVelocitySpeedLimitCritic::score(CriticData & data)

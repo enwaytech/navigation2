@@ -35,12 +35,16 @@ public:
   void initialize() override;
 
   /**
-   * @brief Penalize trajectories whose |vx| exceeds an envelope that shrinks
-   * with |wz|. The envelope is a linear interpolation between max_speed at
-   * |wz| = 0 and min_speed at |wz| >= max_angular_velocity, with a deadband
-   * below min_angular_velocity where no penalty is applied. Cost is summed
-   * per timestep so sustained over-envelope segments are penalized in
-   * proportion to their duration.
+   * @brief Penalize fast driving when turning
+   *
+   * The allowed speed depends on |wz|:
+   *  - Below min_angular_velocity: no constraint (deadband, treats as straight driving).
+   *  - Between min_angular_velocity and max_angular_velocity: allowed speed
+   *    decreases linearly from max_speed down to min_speed.
+   *  - Above max_angular_velocity: allowed speed is clamped at min_speed.
+   *
+   * Any speed above the resulting allowed_speed is penalized; speeds at or
+   * below it incur no cost.
    *
    * @param data CriticData with the sampled trajectory states; per-trajectory
    *             cost is accumulated into data.costs.
@@ -50,8 +54,8 @@ public:
 protected:
   float min_angular_velocity_{0};
   float max_angular_velocity_{0};
-  float max_speed_{0};
   float min_speed_{0};
+  float max_speed_{0};
   float weight_{0};
   unsigned int power_{0};
 };
