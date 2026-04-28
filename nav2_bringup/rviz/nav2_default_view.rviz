@@ -7,9 +7,14 @@ Panels:
         - /Global Options1
         - /TF1/Frames1
         - /TF1/Tree1
+        - /Controller1
+        - /Controller1/Trajectories1
+        - /Controller1/Trajectories1/Namespaces1
         - /MarkerArray2/Topic1
+        - /Axes1
+        - /occupancy check Pose1
       Splitter Ratio: 0.5833333134651184
-    Tree Height: 857
+    Tree Height: 929
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -76,73 +81,21 @@ Visualization Manager:
       Value: false
       Visual Enabled: true
     - Class: rviz_default_plugins/TF
-      Enabled: true
+      Enabled: false
       Filter (blacklist): ""
       Filter (whitelist): ""
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        base_footprint:
-          Value: true
-        base_link:
-          Value: true
-        base_scan:
-          Value: true
-        camera_depth_frame:
-          Value: true
-        camera_depth_optical_frame:
-          Value: true
-        camera_link:
-          Value: true
-        camera_rgb_frame:
-          Value: true
-        camera_rgb_optical_frame:
-          Value: true
-        caster_back_left_link:
-          Value: true
-        caster_back_right_link:
-          Value: true
-        imu_link:
-          Value: true
-        map:
-          Value: true
-        odom:
-          Value: true
-        wheel_left_link:
-          Value: true
-        wheel_right_link:
-          Value: true
       Marker Scale: 1
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: false
       Tree:
-        map:
-          odom:
-            base_footprint:
-              base_link:
-                base_scan:
-                  {}
-                camera_link:
-                  camera_depth_frame:
-                    camera_depth_optical_frame:
-                      {}
-                  camera_rgb_frame:
-                    camera_rgb_optical_frame:
-                      {}
-                caster_back_left_link:
-                  {}
-                caster_back_right_link:
-                  {}
-                imu_link:
-                  {}
-                wheel_left_link:
-                  {}
-                wheel_right_link:
-                  {}
+        {}
       Update Interval: 0
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -450,7 +403,7 @@ Visualization Manager:
             Value: transformed_global_plan
           Value: true
         - Class: rviz_default_plugins/MarkerArray
-          Enabled: false
+          Enabled: true
           Name: Trajectories
           Namespaces:
             {}
@@ -459,8 +412,8 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: marker
-          Value: false
+            Value: /controller_server/candidate_trajectories
+          Value: true
         - Alpha: 1
           Class: rviz_default_plugins/Polygon
           Color: 25; 255; 0
@@ -584,6 +537,53 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: route_graph
       Value: false
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 1
+      Name: Axes
+      Radius: 0.10000000149011612
+      Reference Frame: base_link
+      Value: true
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Class: rviz_default_plugins/Pose
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
+      Name: Furthest reached
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /critics/PathAlignCritic/furthest_reached_path_point
+      Value: true
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Class: rviz_default_plugins/Pose
+      Color: 170; 0; 255
+      Enabled: true
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
+      Name: occupancy check Pose
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /critics/PathAlignCritic/occupancy_check_end_point
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -621,7 +621,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.540799856185913
+      Angle: -1.5707998275756836
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -631,33 +631,33 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 135.89370727539062
+      Scale: 50.504886627197266
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: -1.0674539804458618
-      Y: -0.24717502295970917
+      X: 9.484376907348633
+      Y: 7.713677406311035
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
   Docking:
     collapsed: false
-  Height: 1002
+  Height: 1074
   Hide Left Dock: false
-  Hide Right Dock: false
+  Hide Right Dock: true
   Navigation 2:
-    collapsed: false
-  QMainWindow State: 000000ff00000000fd00000004000000000000015600000394fc020000000afb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb000000100044006900730070006c006100790073010000003b00000394000000c700fffffffb0000000e0044006f0063006b0069006e00670200000c6a000002b3000001560000015cfb0000001e005200650061006c00730065006e0073006500430061006d00650072006100000002c6000000c10000001600ffffff000000010000014a00000394fc0200000004fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fc0000003b00000285000002850100001afa000000000100000002fb00000018004e0061007600690067006100740069006f006e002000320100000000ffffffff0000014a00fffffffb0000000a005600690065007700730100000638000001480000010000fffffffb0000001000530065006c006500630074006f007201000002c600000109000000ba00fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004420000003efc0100000002fb0000000800540069006d00650100000000000004420000000000000000fb0000000800540069006d00650100000000000004500000000000000000000004d40000039400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+    collapsed: true
+  QMainWindow State: 000000ff00000000fd000000040000000000000156000003dcfc020000000afb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb000000100044006900730070006c006100790073010000003b000003dc000000c700fffffffb0000000e0044006f0063006b0069006e00670200000c6a000002b3000001560000015cfb0000001e005200650061006c00730065006e0073006500430061006d00650072006100000002c6000000c10000001600ffffff000000010000014a000003dcfc0200000004fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fc0000003b000002ff0000000000fffffffaffffffff0100000002fb00000018004e0061007600690067006100740069006f006e002000320000000000ffffffff0000014a00fffffffb0000000a005600690065007700730000000638000001480000010000fffffffb0000001000530065006c006500630074006f00720000000340000000d7000000ba00fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004420000003efc0100000002fb0000000800540069006d00650100000000000004420000000000000000fb0000000800540069006d00650100000000000004500000000000000000000002a4000003dc00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   RealsenseCamera:
     collapsed: false
   Selection:
     collapsed: false
   Selector:
-    collapsed: false
+    collapsed: true
   Tool Properties:
     collapsed: false
   Views:
-    collapsed: false
-  Width: 1920
-  X: 1600
+    collapsed: true
+  Width: 1024
+  X: 2048
   Y: 0
