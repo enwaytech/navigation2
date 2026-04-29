@@ -624,7 +624,7 @@ void Optimizer::setSpeedLimit(double speed_limit, bool percentage)
       s.constraints.wz = s.base_constraints.wz * ratio;
     }
   }
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(settings_.constraints, settings_.model_dt, settings_.model_delay);
 }
 
 models::Trajectories & Optimizer::getGeneratedTrajectories()

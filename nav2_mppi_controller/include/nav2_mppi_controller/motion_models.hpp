@@ -124,8 +124,8 @@ public:
     if(model_delay_ == 0.0) {return;}
     unsigned int offset = std::floor((model_delay_ / model_dt_) + 0.5);
     auto state_copy = state;
-    for (unsigned int i = 0; i != state.vx.shape(0); i++) {
-      for (unsigned int j = 1; j != state.vx.shape(1); j++) {
+    for (unsigned int i = 0; i != state.vx.rows(); i++) {
+      for (unsigned int j = 1; j != state.vx.cols(); j++) {
         // Keep the first value before delay (because we cannot do better)
         if (j < offset) {
           state.vx(i, j) = state_copy.vx(i, 0);
