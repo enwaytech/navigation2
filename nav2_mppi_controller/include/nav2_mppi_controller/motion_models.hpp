@@ -61,11 +61,13 @@ public:
     * @param model_dt duration of a time step
     */
   void initialize(const models::ControlConstraints & control_constraints, float model_dt,
-    float model_delay)
+    float model_delay_vx, float model_delay_vy, float model_delay_wz)
   {
     control_constraints_ = control_constraints;
     model_dt_ = model_dt;
-    model_delay_ = model_delay;
+    model_delay_vx_ = model_delay_vx;
+    model_delay_vy_ = model_delay_vy;
+    model_delay_wz_ = model_delay_wz;
   }
 
   /**
@@ -121,20 +123,33 @@ public:
     }
 
     // Apply model delay
-    if(model_delay_ == 0.0) {return;}
-    unsigned int offset = std::floor((model_delay_ / model_dt_) + 0.5);
+    if(model_delay_vx_ == 0.0 && model_delay_wz_ == 0.0 && (model_delay_vy_ == 0.0 || !is_holo)) {return;}
+    unsigned int offset_vx = std::floor((model_delay_vx_ / model_dt_) + 0.5);
+    unsigned int offset_vy = std::floor((model_delay_vy_ / model_dt_) + 0.5);
+    unsigned int offset_wz = std::floor((model_delay_wz_ / model_dt_) + 0.5);
+
     auto state_copy = state;
     for (unsigned int i = 0; i != state.vx.rows(); i++) {
       for (unsigned int j = 1; j != state.vx.cols(); j++) {
         // Keep the first value before delay (because we cannot do better)
-        if (j < offset) {
+        if (j < offset_vx) {
           state.vx(i, j) = state_copy.vx(i, 0);
+        } else {
+          state.vx(i, j) = state_copy.vx(i, j - offset_vx);
+        }
+
+        if (j < offset_wz) {
           state.wz(i, j) = state_copy.wz(i, 0);
-          if (is_holo) {state.vy(i, j) = state_copy.vy(i, 0);}
-        } else { // move the command to express delay
-          state.vx(i, j) = state_copy.vx(i, j - offset);
-          state.wz(i, j) = state_copy.wz(i, j - offset);
-          if (is_holo) {state.vy(i, j) = state_copy.vy(i, j - offset);}
+        } else {
+          state.wz(i, j) = state_copy.wz(i, j - offset_wz);
+        }
+
+        if (is_holo) {
+          if (j < offset_vy) {
+            state.vy(i, j) = state_copy.vy(i, 0);
+          } else {
+            state.vy(i, j) = state_copy.vy(i, j - offset_vy);
+          }
         }
       }
     }
@@ -154,7 +169,9 @@ public:
 
 protected:
   float model_dt_{0.0};
-  float model_delay_{0.0};
+  float model_delay_vx_{0.0};
+  float model_delay_vy_{0.0};
+  float model_delay_wz_{0.0};
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     0.0f, 0.0f};
 };
