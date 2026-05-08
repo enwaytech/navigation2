@@ -18,9 +18,10 @@
 
 #include <Eigen/Dense>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
-#include <algorithm>
+#include <vector>
 
 #include "nav2_mppi_controller/models/control_sequence.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -68,6 +69,34 @@ public:
     model_delay_vx_ = model_delay_vx;
     model_delay_vy_ = model_delay_vy;
     model_delay_wz_ = model_delay_wz;
+
+    // Resize ring buffers to match each axis's delay window. resize preserves
+    // existing entries on shrink/grow, so live param updates don't wipe
+    // in-flight command history mid-run.
+    cmd_history_vx_.resize(offsetSteps(model_delay_vx_), 0.0f);
+    cmd_history_vy_.resize(offsetSteps(model_delay_vy_), 0.0f);
+    cmd_history_wz_.resize(offsetSteps(model_delay_wz_), 0.0f);
+  }
+
+  /**
+    * @brief Push the most recently published command to the per-axis history
+    *        ring buffers. Called once per controller cycle from the optimizer.
+    */
+  void pushCommandHistory(float vx, float vy, float wz)
+  {
+    pushOne(cmd_history_vx_, vx);
+    pushOne(cmd_history_vy_, vy);
+    pushOne(cmd_history_wz_, wz);
+  }
+
+  /**
+    * @brief Zero the ring buffers (called on Optimizer::reset).
+    */
+  void clearCommandHistory()
+  {
+    std::fill(cmd_history_vx_.begin(), cmd_history_vx_.end(), 0.0f);
+    std::fill(cmd_history_vy_.begin(), cmd_history_vy_.end(), 0.0f);
+    std::fill(cmd_history_wz_.begin(), cmd_history_wz_.end(), 0.0f);
   }
 
   /**
@@ -122,36 +151,50 @@ public:
       }
     }
 
-    // Apply model delay
-    if(model_delay_vx_ == 0.0 && model_delay_wz_ == 0.0 && (model_delay_vy_ == 0.0 || !is_holo)) {return;}
-    unsigned int offset_vx = std::floor((model_delay_vx_ / model_dt_) + 0.5);
-    unsigned int offset_vy = std::floor((model_delay_vy_ / model_dt_) + 0.5);
-    unsigned int offset_wz = std::floor((model_delay_wz_ / model_dt_) + 0.5);
+    // Apply input-delay model. Per axis: replay past commands during the
+    // delay window, then shift the optimizer's control sequence to take
+    // effect after the delay.
+    const unsigned int offset_vx = std::floor((model_delay_vx_ / model_dt_) + 0.5);
+    const unsigned int offset_vy = std::floor((model_delay_vy_ / model_dt_) + 0.5);
+    const unsigned int offset_wz = std::floor((model_delay_wz_ / model_dt_) + 0.5);
 
+    if (offset_vx == 0u && offset_wz == 0u && (offset_vy == 0u || !is_holo)) {
+      return;
+    }
+
+    const unsigned int cols = static_cast<unsigned int>(state.vx.cols());
     auto state_copy = state;
-    for (unsigned int i = 0; i != state.vx.rows(); i++) {
-      for (unsigned int j = 1; j != state.vx.cols(); j++) {
-        // Keep the first value before delay (because we cannot do better)
-        if (j < offset_vx) {
-          state.vx(i, j) = state_copy.vx(i, 0);
-        } else {
-          state.vx(i, j) = state_copy.vx(i, j - offset_vx);
-        }
 
-        if (j < offset_wz) {
-          state.wz(i, j) = state_copy.wz(i, 0);
-        } else {
-          state.wz(i, j) = state_copy.wz(i, j - offset_wz);
+    // Vectorized per-axis shift. For each axis with offset > 0:
+    //   - Replay window: dst.col(j) = history[j] for j in [1, offset).
+    //   - Shifted plan:  dst.col(j) = c[j - offset] = src.col(j - offset + 1)
+    //                    for j in [offset, cols), as block:
+    //                    dst.rightCols(cols - offset) = src.middleCols(1, cols - offset)
+    // The shift uses (j - offset + 1) — fixes the one-sample overshoot in the
+    // original (j - offset) convention so that c[0] takes effect at exactly
+    // rollout step `offset` (= time t_now + D), matching pure-transport-delay
+    // semantics.
+    auto applyDelayShift = [cols](
+      Eigen::ArrayXXf & dst,
+      const Eigen::ArrayXXf & src,
+      const std::vector<float> & history,
+      unsigned int offset)
+      {
+        if (offset == 0u) {return;}
+        const unsigned int replay_end = std::min<unsigned int>(offset, cols);
+        for (unsigned int j = 1; j < replay_end; j++) {
+          dst.col(j).setConstant(history[j]);
         }
+        if (offset < cols) {
+          const auto n = static_cast<Eigen::Index>(cols - offset);
+          dst.rightCols(n) = src.middleCols(1, n);
+        }
+      };
 
-        if (is_holo) {
-          if (j < offset_vy) {
-            state.vy(i, j) = state_copy.vy(i, 0);
-          } else {
-            state.vy(i, j) = state_copy.vy(i, j - offset_vy);
-          }
-        }
-      }
+    applyDelayShift(state.vx, state_copy.vx, cmd_history_vx_, offset_vx);
+    applyDelayShift(state.wz, state_copy.wz, cmd_history_wz_, offset_wz);
+    if (is_holo) {
+      applyDelayShift(state.vy, state_copy.vy, cmd_history_vy_, offset_vy);
     }
   }
 
@@ -168,10 +211,28 @@ public:
   virtual void applyConstraints(models::ControlSequence & /*control_sequence*/) {}
 
 protected:
+  std::size_t offsetSteps(float delay) const
+  {
+    if (delay <= 0.0f || model_dt_ <= 0.0f) {return 0u;}
+    return static_cast<std::size_t>(std::floor(delay / model_dt_ + 0.5f));
+  }
+
+  static void pushOne(std::vector<float> & buf, float v)
+  {
+    if (buf.empty()) {return;}
+    std::rotate(buf.begin(), buf.begin() + 1, buf.end());
+    buf.back() = v;
+  }
+
   float model_dt_{0.0};
   float model_delay_vx_{0.0};
   float model_delay_vy_{0.0};
   float model_delay_wz_{0.0};
+  // Per-axis ring buffer of recently published commands. Index 0 is the
+  // oldest (currently affecting the plant); back is the most recent push.
+  std::vector<float> cmd_history_vx_;
+  std::vector<float> cmd_history_vy_;
+  std::vector<float> cmd_history_wz_;
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     0.0f, 0.0f};
 };

@@ -15,13 +15,13 @@
 
 #include "nav2_mppi_controller/optimizer.hpp"
 
+#include <chrono>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <cmath>
-#include <chrono>
 
 #include "nav2_core/controller_exceptions.hpp"
 #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
@@ -124,6 +124,7 @@ void Optimizer::getParams()
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
   getParam(s.open_loop, "open_loop", false);
+  getParam(s.pin_delay_window, "pin_delay_window", false);
 
   s.base_constraints.ax_max = fabs(s.base_constraints.ax_max);
   if (s.base_constraints.ax_min > 0.0) {
@@ -197,7 +198,9 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   noise_generator_.reset(settings_, isHolonomic());
   motion_model_->initialize(
     settings_.constraints, settings_.model_dt,
-    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz);
+    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz,
+    settings_.pin_delay_window);
+  motion_model_->clearCommandHistory();
   trajectory_validator_->initialize(
     parent_, name_ + ".TrajectoryValidator",
     costmap_ros_, parameters_handler_, tf_buffer_, settings_);
@@ -577,9 +580,13 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
 
   auto vx = control_sequence_.vx(offset);
   auto wz = control_sequence_.wz(offset);
+  auto vy = isHolonomic() ? control_sequence_.vy(offset) : 0.0f;
+
+  // Record the just-published command so the motion model can replay it
+  // during the next cycle's delay window.
+  motion_model_->pushCommandHistory(vx, vy, wz);
 
   if (isHolonomic()) {
-    auto vy = control_sequence_.vy(offset);
     return utils::toTwistStamped(vx, vy, wz, stamp, costmap_ros_->getBaseFrameID());
   }
 
@@ -602,7 +609,8 @@ void Optimizer::setMotionModel(const std::string & model)
   }
   motion_model_->initialize(
     settings_.constraints, settings_.model_dt,
-    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz);
+    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz,
+    settings_.pin_delay_window);
 }
 
 void Optimizer::setSpeedLimit(double speed_limit, bool percentage)
@@ -632,7 +640,8 @@ void Optimizer::setSpeedLimit(double speed_limit, bool percentage)
   }
   motion_model_->initialize(
     settings_.constraints, settings_.model_dt,
-    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz);
+    settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz,
+    settings_.pin_delay_window);
 }
 
 models::Trajectories & Optimizer::getGeneratedTrajectories()

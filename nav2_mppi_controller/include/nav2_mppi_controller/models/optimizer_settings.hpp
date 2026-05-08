@@ -42,6 +42,16 @@ struct OptimizerSettings
   bool shift_control_sequence{false};
   size_t retry_attempt_limit{0};
   bool open_loop{false};
+
+  // Delay-window fill mode for the rollout's first `offset` velocity samples:
+  //   false (default): replay the actual past published commands from the
+  //                    motion model's ring buffer. More accurate during
+  //                    transients (apex entries, accel events).
+  //   true:            pin those samples to the initial measured velocity
+  //                    (state.speed). This is Brice Renaudeau's original
+  //                    convention — held constant for the entire delay window.
+  //                    Useful for A/B comparison against the replay variant.
+  bool pin_delay_window{false};
 };
 
 }  // namespace mppi::models

@@ -17,8 +17,8 @@
 
 #include <Eigen/Dense>
 
-#include <string>
 #include <memory>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -307,6 +307,7 @@ protected:
   models::State state_;
   models::ControlSequence control_sequence_;
   std::array<mppi::models::Control, 4> control_history_;
+
   models::Trajectories generated_trajectories_;
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
