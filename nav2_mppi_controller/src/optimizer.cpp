@@ -15,13 +15,13 @@
 
 #include "nav2_mppi_controller/optimizer.hpp"
 
-#include <chrono>
-#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cmath>
+#include <chrono>
 
 #include "nav2_core/controller_exceptions.hpp"
 #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
@@ -105,6 +105,7 @@ void Optimizer::getParams()
   getParam(s.model_delay_vx, "model_delay_vx", 0.0f);
   getParam(s.model_delay_vy, "model_delay_vy", 0.0f);
   getParam(s.model_delay_wz, "model_delay_wz", 0.0f);
+  getParam(s.pin_delay_window, "pin_delay_window", false);
   getParam(s.time_steps, "time_steps", 56);
   getParam(s.batch_size, "batch_size", 1000);
   getParam(s.iteration_count, "iteration_count", 1);
@@ -124,7 +125,6 @@ void Optimizer::getParams()
   getParam(s.sampling_std.wz, "wz_std", 0.4f);
   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
   getParam(s.open_loop, "open_loop", false);
-  getParam(s.pin_delay_window, "pin_delay_window", false);
 
   s.base_constraints.ax_max = fabs(s.base_constraints.ax_max);
   if (s.base_constraints.ax_min > 0.0) {
@@ -582,8 +582,6 @@ geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(
   auto wz = control_sequence_.wz(offset);
   auto vy = isHolonomic() ? control_sequence_.vy(offset) : 0.0f;
 
-  // Record the just-published command so the motion model can replay it
-  // during the next cycle's delay window.
   motion_model_->pushCommandHistory(vx, vy, wz);
 
   if (isHolonomic()) {

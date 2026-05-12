@@ -62,17 +62,16 @@ public:
     * @param model_dt duration of a time step
     */
   void initialize(const models::ControlConstraints & control_constraints, float model_dt,
-    float model_delay_vx, float model_delay_vy, float model_delay_wz)
+    float model_delay_vx, float model_delay_vy, float model_delay_wz,
+    bool pin_delay_window = false)
   {
     control_constraints_ = control_constraints;
     model_dt_ = model_dt;
     model_delay_vx_ = model_delay_vx;
     model_delay_vy_ = model_delay_vy;
     model_delay_wz_ = model_delay_wz;
+    pin_delay_window_ = pin_delay_window;
 
-    // Resize ring buffers to match each axis's delay window. resize preserves
-    // existing entries on shrink/grow, so live param updates don't wipe
-    // in-flight command history mid-run.
     cmd_history_vx_.resize(offsetSteps(model_delay_vx_), 0.0f);
     cmd_history_vy_.resize(offsetSteps(model_delay_vy_), 0.0f);
     cmd_history_wz_.resize(offsetSteps(model_delay_wz_), 0.0f);
@@ -90,7 +89,7 @@ public:
   }
 
   /**
-    * @brief Zero the ring buffers (called on Optimizer::reset).
+    * @brief Zero the ring buffers
     */
   void clearCommandHistory()
   {
@@ -151,50 +150,17 @@ public:
       }
     }
 
-    // Apply input-delay model. Per axis: replay past commands during the
-    // delay window, then shift the optimizer's control sequence to take
-    // effect after the delay.
     const unsigned int offset_vx = std::floor((model_delay_vx_ / model_dt_) + 0.5);
     const unsigned int offset_vy = std::floor((model_delay_vy_ / model_dt_) + 0.5);
     const unsigned int offset_wz = std::floor((model_delay_wz_ / model_dt_) + 0.5);
 
-    if (offset_vx == 0u && offset_wz == 0u && (offset_vy == 0u || !is_holo)) {
-      return;
-    }
-
-    const unsigned int cols = static_cast<unsigned int>(state.vx.cols());
-    auto state_copy = state;
-
-    // Vectorized per-axis shift. For each axis with offset > 0:
-    //   - Replay window: dst.col(j) = history[j] for j in [1, offset).
-    //   - Shifted plan:  dst.col(j) = c[j - offset] = src.col(j - offset + 1)
-    //                    for j in [offset, cols), as block:
-    //                    dst.rightCols(cols - offset) = src.middleCols(1, cols - offset)
-    // The shift uses (j - offset + 1) — fixes the one-sample overshoot in the
-    // original (j - offset) convention so that c[0] takes effect at exactly
-    // rollout step `offset` (= time t_now + D), matching pure-transport-delay
-    // semantics.
-    auto applyDelayShift = [cols](
-      Eigen::ArrayXXf & dst,
-      const Eigen::ArrayXXf & src,
-      const std::vector<float> & history,
-      unsigned int offset)
-      {
-        if (offset == 0u) {return;}
-        const unsigned int replay_end = std::min<unsigned int>(offset, cols);
-        for (unsigned int j = 1; j < replay_end; j++) {
-          dst.col(j).setConstant(history[j]);
-        }
-        if (offset < cols) {
-          const auto n = static_cast<Eigen::Index>(cols - offset);
-          dst.rightCols(n) = src.middleCols(1, n);
-        }
-      };
-
-    applyDelayShift(state.vx, state_copy.vx, cmd_history_vx_, offset_vx);
-    applyDelayShift(state.wz, state_copy.wz, cmd_history_wz_, offset_wz);
-    if (is_holo) {
-      applyDelayShift(state.vy, state_copy.vy, cmd_history_vy_, offset_vy);
+    if (offset_vx > 0u || offset_wz > 0u || (is_holo && offset_vy > 0u)) {
+      auto state_copy = state;
+      applyDelayShift(state.vx, state_copy.vx, cmd_history_vx_, offset_vx);
+      applyDelayShift(state.wz, state_copy.wz, cmd_history_wz_, offset_wz);
+      if (is_holo) {
+        applyDelayShift(state.vy, state_copy.vy, cmd_history_vy_, offset_vy);
+      }
     }
   }
 
@@ -211,12 +177,58 @@ public:
   virtual void applyConstraints(models::ControlSequence & /*control_sequence*/) {}
 
 protected:
+  /**
+    * @brief Apply the per-axis input-delay shift to velocity rollout.
+    *
+    * For j in [1, offset) — the delay window — fill `dst` with either:
+    *   - history[j] (default, ring-buffer replay), or
+    *   - src.col(0) (pin_delay_window_ = true)
+    */
+  void applyDelayShift(
+    Eigen::ArrayXXf & dst,
+    const Eigen::ArrayXXf & src,
+    const std::vector<float> & history,
+    unsigned int offset) const
+  {
+    if (offset == 0u) {
+      return;
+    }
+
+    const auto cols = static_cast<unsigned int>(dst.cols());
+    const unsigned int replay_end = std::min<unsigned int>(offset, cols);
+
+    if (pin_delay_window_) {
+      // Pin to initial velocity
+      for (unsigned int j = 1; j < replay_end; j++) {
+        dst.col(j) = src.col(0);
+      }
+    } else {
+      // Replay from command history
+      for (unsigned int j = 1; j < replay_end; j++) {
+        dst.col(j).setConstant(history[j]);
+      }
+    }
+
+    if (offset < cols) {
+      const auto n = static_cast<Eigen::Index>(cols - offset);
+      dst.rightCols(n) = src.middleCols(1, n);
+    }
+  }
+
+  /**
+    * @brief Convert a delay in seconds to an offset in number of rollout steps, rounding to the nearest step.
+    */
   std::size_t offsetSteps(float delay) const
   {
-    if (delay <= 0.0f || model_dt_ <= 0.0f) {return 0u;}
+    if (delay <= 0.0f || model_dt_ <= 0.0f) {
+      return 0u;
+    }
     return static_cast<std::size_t>(std::floor(delay / model_dt_ + 0.5f));
   }
 
+  /**
+    * @brief Push a value to the back of a ring buffer and rotate the elements.
+    */
   static void pushOne(std::vector<float> & buf, float v)
   {
     if (buf.empty()) {return;}
@@ -228,11 +240,16 @@ protected:
   float model_delay_vx_{0.0};
   float model_delay_vy_{0.0};
   float model_delay_wz_{0.0};
-  // Per-axis ring buffer of recently published commands. Index 0 is the
-  // oldest (currently affecting the plant); back is the most recent push.
+
+  // Delay-window fill mode. false = replay from cmd_history true =
+  // pin to initial velocity.
+  bool pin_delay_window_{false};
+
+  // Per-axis ring buffer of recently published commands
   std::vector<float> cmd_history_vx_;
   std::vector<float> cmd_history_vy_;
   std::vector<float> cmd_history_wz_;
+
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     0.0f, 0.0f};
 };
