@@ -254,8 +254,9 @@ TEST(UtilsTests, FurthestReachedPointUturn)
   generated_trajectories.yaws = Eigen::ArrayXXf::Zero(10, 4);
 
   CriticData data =
-  {state, generated_trajectories, path, goal, costs, model_dt, false, nullptr, nullptr,
-    std::nullopt, std::nullopt, {}};  /// Caution, keep references
+  {state, generated_trajectories, path, goal, costs, std::nullopt, model_dt, false, nullptr,
+    nullptr,
+    std::nullopt, std::nullopt};  /// Caution, keep references
 
   size_t result = findPathFurthestReachedPoint(data);
   EXPECT_LE(result, 6u);
