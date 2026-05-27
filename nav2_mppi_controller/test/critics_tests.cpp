@@ -881,8 +881,8 @@ TEST(CriticTests, ObstacleBypassCritic)
   Eigen::ArrayXf costs = Eigen::ArrayXf::Zero(1000);
   float model_dt = 0.1;
   CriticData data =
-  {state, generated_trajectories, path, goal, costs, model_dt,
-    false, nullptr, nullptr, std::nullopt, std::nullopt, {}};
+  {state, generated_trajectories, path, goal, costs, std::nullopt, model_dt,
+    false, nullptr, nullptr, std::nullopt, std::nullopt};
   data.motion_model = std::make_shared<DiffDriveMotionModel>();
 
   // Obstacle at cells [25,30]x[22,27] = world [2.5,3.0]x[2.2,2.7]
