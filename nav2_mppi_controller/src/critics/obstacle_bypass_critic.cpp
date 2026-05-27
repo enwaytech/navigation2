@@ -31,6 +31,36 @@ void ObstacleBypassCritic::initialize()
   getParam(threshold_to_consider_, "threshold_to_consider", 0.5f);
   getParam(bypass_offset_dist_, "bypass_offset_dist", 1.0f);
 
+  getParam(visualize_furthest_point_, "visualize_furthest_point", false);
+  if (visualize_furthest_point_) {
+    auto node = parent_.lock();
+    if (node) {
+      furthest_point_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+          "/critics/ObstacleBypassCritic/furthest_reached_path_point", 1);
+      furthest_point_pub_->on_activate();
+    }
+  }
+
+  getParam(visualize_occupancy_check_distance_, "visualize_occupancy_check_distance", false);
+  if (visualize_occupancy_check_distance_) {
+    auto node = parent_.lock();
+    if (node) {
+      occupancy_check_dist_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+          "/critics/ObstacleBypassCritic/occupancy_check_end_point", 1);
+      occupancy_check_dist_pub_->on_activate();
+    }
+  }
+
+  getParam(visualize_target_point_, "visualize_target_point", false);
+  if (visualize_target_point_) {
+    auto node = parent_.lock();
+    if (node) {
+      target_point_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+          "/critics/ObstacleBypassCritic/target_point", 1);
+      target_point_pub_->on_activate();
+    }
+  }
+
   RCLCPP_INFO(
     logger_,
     "ObstacleBypassCritic instantiated with %d power and %f weight",
@@ -116,6 +146,24 @@ void ObstacleBypassCritic::score(CriticData & data)
   // Don't apply when first getting bearing w.r.t. the path
   utils::setPathFurthestPointIfNotSet(data);
   const size_t furthest_reached_path_point = *data.furthest_reached_path_point;
+
+  const auto now = clock_->now();
+  // Visualize furthest reached pose if enabled
+  if (visualize_furthest_point_ && furthest_reached_path_point > 0 &&
+    furthest_point_pub_->get_subscription_count() > 0)
+  {
+    auto furthest_point = std::make_unique<geometry_msgs::msg::PoseStamped>();
+    furthest_point->header.frame_id = costmap_ros_->getGlobalFrameID();
+    furthest_point->header.stamp = now;
+    furthest_point->pose.position.x = data.path.x(furthest_reached_path_point);
+    furthest_point->pose.position.y = data.path.y(furthest_reached_path_point);
+    furthest_point->pose.position.z = 0.0;
+    tf2::Quaternion quat;
+    quat.setRPY(0.0, 0.0, data.path.yaws(furthest_reached_path_point));
+    furthest_point->pose.orientation = tf2::toMsg(quat);
+    furthest_point_pub_->publish(std::move(furthest_point));
+  }
+
   if (furthest_reached_path_point < offset_from_furthest_) {
     return;
   }
@@ -131,6 +179,22 @@ void ObstacleBypassCritic::score(CriticData & data)
     if (path_dist <= min_distance_occupancy_check_ || i < furthest_reached_path_point) {
       occupancy_check_distance_idx = (i + 1 < path_segments_count) ? i + 1 : i;
     }
+  }
+
+  // Visualize occupancy check distance if enabled
+  if (visualize_occupancy_check_distance_ &&
+    occupancy_check_dist_pub_->get_subscription_count() > 0)
+  {
+    auto occupancy_check_point = std::make_unique<geometry_msgs::msg::PoseStamped>();
+    occupancy_check_point->header.frame_id = costmap_ros_->getGlobalFrameID();
+    occupancy_check_point->header.stamp = now;
+    occupancy_check_point->pose.position.x = data.path.x(occupancy_check_distance_idx);
+    occupancy_check_point->pose.position.y = data.path.y(occupancy_check_distance_idx);
+    occupancy_check_point->pose.position.z = 0.0;
+    tf2::Quaternion quat;
+    quat.setRPY(0.0, 0.0, data.path.yaws(occupancy_check_distance_idx));
+    occupancy_check_point->pose.orientation = tf2::toMsg(quat);
+    occupancy_check_dist_pub_->publish(std::move(occupancy_check_point));
   }
 
   // Check if obstacles are blocking significant proportions of the local path
@@ -226,6 +290,21 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
 
   bypass_active_ = true;
+
+  // Visualize target point if enabled
+  if (visualize_target_point_ && target_point_pub_->get_subscription_count() > 0)
+  {
+    auto target_point = std::make_unique<geometry_msgs::msg::PoseStamped>();
+    target_point->header.frame_id = costmap_ros_->getGlobalFrameID();
+    target_point->header.stamp = now;
+    target_point->pose.position.x = target_x;
+    target_point->pose.position.y = target_y;
+    target_point->pose.position.z = 0.0;
+    tf2::Quaternion quat;
+    quat.setRPY(0.0, 0.0, path_yaw);
+    target_point->pose.orientation = tf2::toMsg(quat);
+    target_point_pub_->publish(std::move(target_point));
+  }
 }
 
 }  // namespace mppi::critics
