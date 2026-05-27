@@ -62,6 +62,15 @@ protected:
   unsigned int power_{0};
   float weight_{0};
   bool bypass_active_{false};
+
+  bool visualize_furthest_point_{false};
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr furthest_point_pub_;
+
+  bool visualize_occupancy_check_distance_{false};
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr occupancy_check_dist_pub_;
+
+  bool visualize_target_point_{false};
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_point_pub_;
 };
 
 }  // namespace mppi::critics
