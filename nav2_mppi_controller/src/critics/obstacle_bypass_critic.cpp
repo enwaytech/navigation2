@@ -16,6 +16,7 @@
 
 #include "nav2_mppi_controller/critics/obstacle_bypass_critic.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
+#include "nav2_util/line_iterator.hpp"
 
 namespace mppi::critics
 {
@@ -68,7 +69,11 @@ void ObstacleBypassCritic::initialize()
 }
 
 bool ObstacleBypassCritic::determineBestBypassSide(
-  float path_x, float path_y, float path_yaw, float & signed_offset)
+  float path_x, float path_y, float path_yaw,
+  float robot_x, float robot_y,
+  float target_base_x, float target_base_y,
+  float target_perp_x, float target_perp_y,
+  float & signed_offset)
 {
   const float perp_x = -sinf(path_yaw);
   const float perp_y = cosf(path_yaw);
@@ -84,7 +89,8 @@ bool ObstacleBypassCritic::determineBestBypassSide(
              (c != nav2_costmap_2d::NO_INFORMATION || tracking_unknown);
     };
 
-  // Scan perpendicular to the path to find the first non-lethal cell on each side.
+  // Scan perpendicular to the path at the obstacle to find the first non-lethal
+  // cell on each side.
   auto scanSide = [&](float sign) -> int {
       for (int s = 1; s <= max_steps; ++s) {
         float wx = path_x + sign * s * resolution * perp_x;
@@ -98,39 +104,57 @@ bool ObstacleBypassCritic::determineBestBypassSide(
       return max_steps + 1;
     };
 
+  unsigned int robot_mx, robot_my;
+  if (!costmap_->worldToMap(robot_x, robot_y, robot_mx, robot_my)) {
+    return false;
+  }
+
+  // A candidate side is usable only if the forward-looking target cell is
+  // non-lethal AND the straight line from the robot to that target is free of
+  // lethal cells. The line check prevents steering toward free space that lies
+  // behind a wall (or other obstacle) the robot cannot actually drive through.
+  auto isSideReachable = [&](float candidate_offset) -> bool {
+      const float tx = target_base_x + candidate_offset * target_perp_x;
+      const float ty = target_base_y + candidate_offset * target_perp_y;
+      unsigned int tmx, tmy;
+      if (!costmap_->worldToMap(tx, ty, tmx, tmy) ||
+        !isNonLethal(costmap_->getCost(tmx, tmy)))
+      {
+        return false;
+      }
+      for (nav2_util::LineIterator line(robot_mx, robot_my, tmx, tmy);
+        line.isValid(); line.advance())
+      {
+        if (!isNonLethal(costmap_->getCost(line.getX(), line.getY()))) {
+          return false;
+        }
+      }
+      return true;
+    };
+
   const int first_free_left = scanSide(1.0f);
   const int first_free_right = scanSide(-1.0f);
   if (first_free_left > max_steps && first_free_right > max_steps) {
     return false;
   }
 
-  // Prefer the side where free space is closer; break ties to left
+  // Prefer the side where free space is closer; break ties to left.
   // Signed: + left, - right. Distance = first free cell + margin.
   float sign = (first_free_left <= first_free_right) ? 1.0f : -1.0f;
   int first_free = std::min(first_free_left, first_free_right);
   signed_offset = sign * (first_free * resolution + bypass_offset_dist_);
-
-  // Validate the target point on the chosen side
-  float target_x = path_x + signed_offset * perp_x;
-  float target_y = path_y + signed_offset * perp_y;
-  if (costmap_->worldToMap(target_x, target_y, mx, my) &&
-    isNonLethal(costmap_->getCost(mx, my)))
-  {
+  if (isSideReachable(signed_offset)) {
     return true;
   }
 
-  // Try the other side
+  // The preferred side is unreachable, try the other side.
   sign = -sign;
   first_free = (sign > 0.0f) ? first_free_left : first_free_right;
   if (first_free > max_steps) {
     return false;
   }
   signed_offset = sign * (first_free * resolution + bypass_offset_dist_);
-  target_x = path_x + signed_offset * perp_x;
-  target_y = path_y + signed_offset * perp_y;
-  if (costmap_->worldToMap(target_x, target_y, mx, my) &&
-    isNonLethal(costmap_->getCost(mx, my)))
-  {
+  if (isSideReachable(signed_offset)) {
     return true;
   }
 
@@ -255,15 +279,11 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
   const float path_yaw = atan2f(tangent_y, tangent_x);
 
-  float signed_offset = 0.0f;
-  if (!determineBestBypassSide(path_x, path_y, path_yaw, signed_offset)) {
-    bypass_active_ = false;
-    return;  // No valid bypass found
-  }
-
-  // Score against a forward-looking target point offset from the path
-  // in the direction of the bypass to incentivize trajectories to steer around
-  // the obstacle in the direction with the least disruption to path tracking.
+  // Forward-looking target base point and its lateral (perpendicular) direction.
+  // The bypass is scored against this point offset to the chosen side, and it is
+  // also the point used to validate that the chosen side is reachable from the
+  // robot. Computed before choosing the side so the reachability line check can
+  // use the actual scoring target rather than the obstacle-local point.
   const size_t target_idx = std::min(
     furthest_reached_path_point + offset_from_furthest_, path_segments_count - 1);
   const size_t target_next = std::min(target_idx + 1, path_segments_count - 1);
@@ -276,8 +296,28 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
   const float perp_x = -target_ty / target_tlen;
   const float perp_y = target_tx / target_tlen;
-  const float target_x = data.path.x(target_idx) + signed_offset * perp_x;
-  const float target_y = data.path.y(target_idx) + signed_offset * perp_y;
+  const float target_base_x = data.path.x(target_idx);
+  const float target_base_y = data.path.y(target_idx);
+
+  const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
+  float signed_offset = 0.0f;
+  if (!determineBestBypassSide(
+      path_x, path_y, path_yaw,
+      static_cast<float>(robot_pose.position.x),
+      static_cast<float>(robot_pose.position.y),
+      target_base_x, target_base_y, perp_x, perp_y,
+      signed_offset))
+  {
+    bypass_active_ = false;
+    return;  // No valid bypass found
+  }
+
+  // Score against a forward-looking target point offset from the path
+  // in the direction of the bypass to incentivize trajectories to steer around
+  // the obstacle in the direction with the least disruption to path tracking.
+  const float target_x = target_base_x + signed_offset * perp_x;
+  const float target_y = target_base_y + signed_offset * perp_y;
+
   const int last_idx = data.trajectories.y.cols() - 1;
   const auto diff_x = target_x - data.trajectories.x.col(last_idx);
   const auto diff_y = target_y - data.trajectories.y.col(last_idx);
