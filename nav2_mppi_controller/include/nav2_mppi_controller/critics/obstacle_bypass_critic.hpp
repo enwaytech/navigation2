@@ -48,11 +48,21 @@ protected:
    * @param path_x X position on path at obstacle
    * @param path_y Y position on path at obstacle
    * @param path_yaw Yaw of path tangent at obstacle
+   * @param robot_x Robot X position (for line-of-sight reachability check)
+   * @param robot_y Robot Y position (for line-of-sight reachability check)
+   * @param target_base_x X of the forward-looking target base point on the path
+   * @param target_base_y Y of the forward-looking target base point on the path
+   * @param target_perp_x X of the unit perpendicular at the target base point
+   * @param target_perp_y Y of the unit perpendicular at the target base point
    * @param[out] signed_offset Signed offset distance (+ left, - right)
    * @return true if a valid bypass target was found
    */
   bool determineBestBypassSide(
-    float path_x, float path_y, float path_yaw, float & signed_offset);
+    float path_x, float path_y, float path_yaw,
+    float robot_x, float robot_y,
+    float target_base_x, float target_base_y,
+    float target_perp_x, float target_perp_y,
+    float & signed_offset);
 
   size_t offset_from_furthest_{0};
   float threshold_to_consider_{0};
