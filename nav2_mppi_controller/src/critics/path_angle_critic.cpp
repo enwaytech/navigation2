@@ -76,9 +76,20 @@ void PathAngleCritic::score(CriticData & data)
   }
 
   utils::setPathFurthestPointIfNotSet(data);
-  auto offsetted_idx = std::min(
-    *data.furthest_reached_path_point + offset_from_furthest_,
-    static_cast<size_t>(data.path.x.size()) - 1);
+  utils::setPathCostsIfNotSet(data, costmap_ros_);
+  const size_t path_size = data.path.x.size() - 1;
+
+  auto offsetted_idx = std::min(*data.furthest_reached_path_point + offset_from_furthest_,
+      path_size);
+  // Drive to the first valid path point, in case of dynamic obstacles on path
+  // we want to drive past it, not through it
+  bool valid = false;
+  while (!valid && offsetted_idx < path_size - 1) {
+    valid = (*data.path_pts_valid)[offsetted_idx];
+    if (!valid) {
+      offsetted_idx++;
+    }
+  }
 
   const float goal_x = data.path.x(offsetted_idx);
   const float goal_y = data.path.y(offsetted_idx);
