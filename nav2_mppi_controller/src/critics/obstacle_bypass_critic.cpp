@@ -13,10 +13,10 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cmath>
 
 #include "nav2_mppi_controller/critics/obstacle_bypass_critic.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
-#include "nav2_util/line_iterator.hpp"
 
 namespace mppi::critics
 {
@@ -70,7 +70,7 @@ void ObstacleBypassCritic::initialize()
 
 bool ObstacleBypassCritic::determineBestBypassSide(
   float path_x, float path_y, float path_yaw,
-  float robot_x, float robot_y,
+  float free_x, float free_y, float free_perp_x, float free_perp_y,
   float target_base_x, float target_base_y,
   float target_perp_x, float target_perp_y,
   float & signed_offset)
@@ -104,15 +104,17 @@ bool ObstacleBypassCritic::determineBestBypassSide(
       return max_steps + 1;
     };
 
-  unsigned int robot_mx, robot_my;
-  if (!costmap_->worldToMap(robot_x, robot_y, robot_mx, robot_my)) {
-    return false;
-  }
-
-  // A candidate side is usable only if the forward-looking target cell is
-  // non-lethal AND the straight line from the robot to that target is free of
-  // lethal cells. The line check prevents steering toward free space that lies
-  // behind a wall (or other obstacle) the robot cannot actually drive through.
+  // A candidate side is usable only if:
+  //  1. the forward-looking target cell is non-lethal (endpoint guard), and
+  //  2. the lateral move into the bypass corridor is unobstructed. This is
+  //     checked by sweeping perpendicular to the path from the last free path
+  //     point *before* the obstacle out to the offset on the chosen side. That
+  //     slice is the last chance to move sideways before reaching the obstacle:
+  //     a lethal cell there means the corridor is unreachable (e.g. free space
+  //     that perception reports behind a continuous wall running alongside the
+  //     path). If instead the wall only begins at the obstacle, this slice is
+  //     clear and the side is correctly accepted (the robot can swing wide
+  //     before the obstacle).
   auto isSideReachable = [&](float candidate_offset) -> bool {
       const float tx = target_base_x + candidate_offset * target_perp_x;
       const float ty = target_base_y + candidate_offset * target_perp_y;
@@ -122,10 +124,17 @@ bool ObstacleBypassCritic::determineBestBypassSide(
       {
         return false;
       }
-      for (nav2_util::LineIterator line(robot_mx, robot_my, tmx, tmy);
-        line.isValid(); line.advance())
-      {
-        if (!isNonLethal(costmap_->getCost(line.getX(), line.getY()))) {
+
+      const float dir = (candidate_offset >= 0.0f) ? 1.0f : -1.0f;
+      const int sweep_steps =
+        static_cast<int>(std::ceil(std::fabs(candidate_offset) / resolution));
+      unsigned int smx, smy;
+      for (int s = 0; s <= sweep_steps; ++s) {
+        const float sx = free_x + dir * s * resolution * free_perp_x;
+        const float sy = free_y + dir * s * resolution * free_perp_y;
+        if (!costmap_->worldToMap(sx, sy, smx, smy) ||
+          !isNonLethal(costmap_->getCost(smx, smy)))
+        {
           return false;
         }
       }
@@ -279,11 +288,30 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
   const float path_yaw = atan2f(tangent_y, tangent_x);
 
+  // Last free path point before the obstacle. The chosen bypass side is validated
+  // by sweeping perpendicular to the path from here, so this is the slice where
+  // reachability of the lateral corridor is decided. If the block starts at the
+  // very first path point there is no free point before it; skip the bypass.
+  if (blocked_idx == 0) {
+    bypass_active_ = false;
+    return;
+  }
+  const size_t free_idx = blocked_idx - 1;
+  const size_t free_next = std::min(free_idx + 1, path_segments_count - 1);
+  const float free_tx = data.path.x(free_next) - data.path.x(free_idx);
+  const float free_ty = data.path.y(free_next) - data.path.y(free_idx);
+  const float free_tlen = sqrtf(free_tx * free_tx + free_ty * free_ty);
+  if (free_tlen < 1e-6f) {
+    bypass_active_ = false;
+    return;
+  }
+  const float free_perp_x = -free_ty / free_tlen;
+  const float free_perp_y = free_tx / free_tlen;
+  const float free_x = data.path.x(free_idx);
+  const float free_y = data.path.y(free_idx);
+
   // Forward-looking target base point and its lateral (perpendicular) direction.
-  // The bypass is scored against this point offset to the chosen side, and it is
-  // also the point used to validate that the chosen side is reachable from the
-  // robot. Computed before choosing the side so the reachability line check can
-  // use the actual scoring target rather than the obstacle-local point.
+  // The bypass is scored against this point offset to the chosen side.
   const size_t target_idx = std::min(
     furthest_reached_path_point + offset_from_furthest_, path_segments_count - 1);
   const size_t target_next = std::min(target_idx + 1, path_segments_count - 1);
@@ -299,12 +327,10 @@ void ObstacleBypassCritic::score(CriticData & data)
   const float target_base_x = data.path.x(target_idx);
   const float target_base_y = data.path.y(target_idx);
 
-  const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
   float signed_offset = 0.0f;
   if (!determineBestBypassSide(
       path_x, path_y, path_yaw,
-      static_cast<float>(robot_pose.position.x),
-      static_cast<float>(robot_pose.position.y),
+      free_x, free_y, free_perp_x, free_perp_y,
       target_base_x, target_base_y, perp_x, perp_y,
       signed_offset))
   {
