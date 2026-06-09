@@ -51,6 +51,8 @@ protected:
    * @param path_x X position on path at obstacle
    * @param path_y Y position on path at obstacle
    * @param path_yaw Yaw of path tangent at obstacle
+   * @param robot_x Robot X position (start of the reachability line check)
+   * @param robot_y Robot Y position (start of the reachability line check)
    * @param free_x X of the last free path point before the obstacle
    * @param free_y Y of the last free path point before the obstacle
    * @param free_perp_x X of the unit (left) perpendicular at the last free point
@@ -59,13 +61,14 @@ protected:
    * @param target_base_y Y of the forward-looking target base point on the path
    * @param target_perp_x X of the unit perpendicular at the target base point
    * @param target_perp_y Y of the unit perpendicular at the target base point
-   * @param check_reachability When false, skip the lateral reachability sweep
+   * @param check_reachability When false, skip the reachability line check
    *   (used when there is no valid free-point anchor before the obstacle)
    * @param[out] signed_offset Signed offset distance (+ left, - right)
    * @return true if a valid bypass target was found
    */
   bool determineBestBypassSide(
     float path_x, float path_y, float path_yaw,
+    float robot_x, float robot_y,
     float free_x, float free_y, float free_perp_x, float free_perp_y,
     float target_base_x, float target_base_y,
     float target_perp_x, float target_perp_y,
