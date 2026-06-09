@@ -15,9 +15,12 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__OBSTACLE_BYPASS_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__OBSTACLE_BYPASS_CRITIC_HPP_
 
+#include <string>
+
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 namespace mppi::critics
 {
@@ -56,6 +59,8 @@ protected:
    * @param target_base_y Y of the forward-looking target base point on the path
    * @param target_perp_x X of the unit perpendicular at the target base point
    * @param target_perp_y Y of the unit perpendicular at the target base point
+   * @param check_reachability When false, skip the lateral reachability sweep
+   *   (used when there is no valid free-point anchor before the obstacle)
    * @param[out] signed_offset Signed offset distance (+ left, - right)
    * @return true if a valid bypass target was found
    */
@@ -64,7 +69,24 @@ protected:
     float free_x, float free_y, float free_perp_x, float free_perp_y,
     float target_base_x, float target_base_y,
     float target_perp_x, float target_perp_y,
+    bool check_reachability,
     float & signed_offset);
+
+  /**
+   * @brief Log a one-line bypass status, but only when it differs from the last
+   * logged one, so the message is readable and does not spam at control rate.
+   * @param status Human-readable status / reason string
+   */
+  void reportStatus(const std::string & status);
+
+  /**
+   * @brief Publish the lateral reachability check segment for debugging.
+   * @param x0,y0 Segment start (last free path point)
+   * @param x1,y1 Segment end (offset endpoint, or the blocking cell if blocked)
+   * @param blocked Whether the sweep hit a lethal cell (colors the line red)
+   * @param id Marker id (distinguishes the preferred vs alternate side)
+   */
+  void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked, int id);
 
   size_t offset_from_furthest_{0};
   float threshold_to_consider_{0};
@@ -83,6 +105,15 @@ protected:
 
   bool visualize_target_point_{false};
   nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_point_pub_;
+
+  bool visualize_blocked_point_{false};
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr blocked_point_pub_;
+
+  bool visualize_check_line_{false};
+  nav2::Publisher<visualization_msgs::msg::Marker>::SharedPtr check_line_pub_;
+
+  // Last status logged by reportStatus(); used to suppress repeated messages.
+  std::string last_status_;
 };
 
 }  // namespace mppi::critics
