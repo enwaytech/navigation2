@@ -31,6 +31,7 @@ void ObstacleBypassCritic::initialize()
   getParam(min_distance_occupancy_check_, "min_distance_occupancy_check", 2.0f);
   getParam(max_path_occupancy_ratio_, "max_path_occupancy_ratio", 0.07f);
   getParam(offset_from_furthest_, "offset_from_furthest", 20);
+  getParam(target_offset_from_furthest_, "target_offset_from_furthest", 20);
   getParam(threshold_to_consider_, "threshold_to_consider", 0.5f);
   getParam(bypass_offset_dist_, "bypass_offset_dist", 1.0f);
 
@@ -430,7 +431,7 @@ void ObstacleBypassCritic::score(CriticData & data)
   // Forward-looking target base point and its lateral (perpendicular) direction.
   // The bypass is scored against this point offset to the chosen side.
   const size_t target_idx = std::min(
-    furthest_reached_path_point + offset_from_furthest_, path_segments_count - 1);
+    furthest_reached_path_point + target_offset_from_furthest_, path_segments_count - 1);
   const size_t target_next = std::min(target_idx + 1, path_segments_count - 1);
   const float target_tx = data.path.x(target_next) - data.path.x(target_idx);
   const float target_ty = data.path.y(target_next) - data.path.y(target_idx);
