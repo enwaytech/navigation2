@@ -63,6 +63,9 @@ protected:
    * @param target_perp_y Y of the unit perpendicular at the target base point
    * @param check_reachability When false, skip the reachability line check
    *   (used when there is no valid free-point anchor before the obstacle)
+   * @param prev_sign Previously chosen side (+1 left, -1 right, 0 none). The
+   *   chosen side stays on prev_sign as long as that side still has free space,
+   *   to avoid flip-flopping (hysteresis); otherwise the closer side is used.
    * @param[out] signed_offset Signed offset distance (+ left, - right)
    * @return true if a valid bypass target was found
    */
@@ -73,6 +76,7 @@ protected:
     float target_base_x, float target_base_y,
     float target_perp_x, float target_perp_y,
     bool check_reachability,
+    float prev_sign,
     float & signed_offset);
 
   /**
@@ -97,6 +101,10 @@ protected:
   float min_distance_occupancy_check_{0};
   float max_path_occupancy_ratio_{0};
   float bypass_offset_dist_{0};
+  // Side chosen on the last active cycle (+1 left, -1 right, 0 none); kept across
+  // the transient "not enough path traversed" gate to stabilize the side, reset
+  // when the obstacle is resolved/passed.
+  float last_bypass_sign_{0.0f};
   unsigned int power_{0};
   float weight_{0};
   bool bypass_active_{false};
