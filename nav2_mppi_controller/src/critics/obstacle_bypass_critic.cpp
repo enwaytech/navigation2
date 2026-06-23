@@ -133,6 +133,7 @@ bool ObstacleBypassCritic::determineBestBypassSide(
   float target_base_x, float target_base_y,
   float target_perp_x, float target_perp_y,
   bool check_reachability,
+  float prev_sign,
   float & signed_offset)
 {
   const float perp_x = -sinf(path_yaw);
@@ -236,10 +237,20 @@ bool ObstacleBypassCritic::determineBestBypassSide(
     return false;
   }
 
-  // Prefer the side where free space is closer; break ties to left.
+  // Side hysteresis: prefer the previously chosen side as long as it still has
+  // free space, to avoid flip-flopping when both sides are viable (e.g. during
+  // transient controller resets near the obstacle, where the reachability anchor
+  // is gone). Otherwise prefer the side where free space is closer; ties to left.
   // Signed: + left, - right. Distance = first free cell + margin.
-  float sign = (first_free_left <= first_free_right) ? 1.0f : -1.0f;
-  int first_free = std::min(first_free_left, first_free_right);
+  float sign;
+  if (prev_sign > 0.0f && first_free_left <= max_steps) {
+    sign = 1.0f;
+  } else if (prev_sign < 0.0f && first_free_right <= max_steps) {
+    sign = -1.0f;
+  } else {
+    sign = (first_free_left <= first_free_right) ? 1.0f : -1.0f;
+  }
+  int first_free = (sign > 0.0f) ? first_free_left : first_free_right;
   const char * pref_label = (sign > 0.0f) ? "left" : "right";
   signed_offset = sign * (first_free * resolution + bypass_offset_dist_);
   const char * why_pref = "ok";
@@ -268,6 +279,7 @@ bool ObstacleBypassCritic::determineBestBypassSide(
 void ObstacleBypassCritic::score(CriticData & data)
 {
   if (!enabled_ || data.state.local_path_length < threshold_to_consider_) {
+    last_bypass_sign_ = 0.0f;
     return;
   }
 
@@ -345,6 +357,7 @@ void ObstacleBypassCritic::score(CriticData & data)
     if (!bypass_active_ || occupancy_ratio < max_path_occupancy_ratio_ * 0.5f) {
       reportStatus("INACTIVE: path ahead is clear");
       bypass_active_ = false;
+      last_bypass_sign_ = 0.0f;
       return;
     }
   }
@@ -381,6 +394,7 @@ void ObstacleBypassCritic::score(CriticData & data)
   if (resume_idx >= path_pts_valid.size()) {
     reportStatus("INACTIVE: path blocked through the end of the local horizon");
     bypass_active_ = false;
+    last_bypass_sign_ = 0.0f;
     return;
   }
 
@@ -399,6 +413,7 @@ void ObstacleBypassCritic::score(CriticData & data)
   if (tangent_len < 1e-6f) {
     reportStatus("INACTIVE: degenerate path tangent at the obstacle");
     bypass_active_ = false;
+    last_bypass_sign_ = 0.0f;
     return;
   }
   const float path_yaw = atan2f(tangent_y, tangent_x);
@@ -439,6 +454,7 @@ void ObstacleBypassCritic::score(CriticData & data)
   if (target_tlen < 1e-6f) {
     reportStatus("INACTIVE: degenerate path tangent at the forward target");
     bypass_active_ = false;
+    last_bypass_sign_ = 0.0f;
     return;
   }
   const float perp_x = -target_ty / target_tlen;
@@ -455,9 +471,11 @@ void ObstacleBypassCritic::score(CriticData & data)
       free_x, free_y, free_perp_x, free_perp_y,
       target_base_x, target_base_y, perp_x, perp_y,
       check_reachability,
+      last_bypass_sign_,
       signed_offset))
   {
     bypass_active_ = false;
+    last_bypass_sign_ = 0.0f;
     return;  // No valid bypass found
   }
 
@@ -479,6 +497,7 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
 
   bypass_active_ = true;
+  last_bypass_sign_ = (signed_offset >= 0.0f) ? 1.0f : -1.0f;
   reportStatus(
     std::string("ACTIVE: ") +
     (signed_offset >= 0.0f ? "left" : "right"));
