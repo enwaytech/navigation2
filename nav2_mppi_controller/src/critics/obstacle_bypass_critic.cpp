@@ -368,12 +368,6 @@ void ObstacleBypassCritic::score(CriticData & data)
     if (!path_pts_valid[j]) {blocked_idx = j; break;}
   }
 
-  // Find first valid path point past the blocked region
-  size_t resume_idx = blocked_idx;
-  for (; resume_idx < path_pts_valid.size(); resume_idx++) {
-    if (path_pts_valid[resume_idx]) {break;}
-  }
-
   // Visualize the first blocked path point if enabled
   if (visualize_blocked_point_ && blocked_idx > 0 &&
     blocked_point_pub_->get_subscription_count() > 0)
@@ -381,13 +375,19 @@ void ObstacleBypassCritic::score(CriticData & data)
     auto blocked_point = std::make_unique<geometry_msgs::msg::PoseStamped>();
     blocked_point->header.frame_id = costmap_ros_->getGlobalFrameID();
     blocked_point->header.stamp = now;
-    blocked_point->pose.position.x = data.path.x(resume_idx);
-    blocked_point->pose.position.y = data.path.y(resume_idx);
+    blocked_point->pose.position.x = data.path.x(blocked_idx);
+    blocked_point->pose.position.y = data.path.y(blocked_idx);
     blocked_point->pose.position.z = 0.0;
     tf2::Quaternion quat;
-    quat.setRPY(0.0, 0.0, data.path.yaws(resume_idx));
+    quat.setRPY(0.0, 0.0, data.path.yaws(blocked_idx));
     blocked_point->pose.orientation = tf2::toMsg(quat);
     blocked_point_pub_->publish(std::move(blocked_point));
+  }
+
+  // Find first valid path point past the blocked region
+  size_t resume_idx = blocked_idx;
+  for (; resume_idx < path_pts_valid.size(); resume_idx++) {
+    if (path_pts_valid[resume_idx]) {break;}
   }
 
   // If blocked until the end of the path, don't activate bypass
@@ -397,17 +397,6 @@ void ObstacleBypassCritic::score(CriticData & data)
     last_bypass_sign_ = 0.0f;
     return;
   }
-
-  // constexpr size_t resume_offset = 15;
-  // // If the obstacle's free-resume point is already within the near look-ahead
-  // // zone, the robot has effectively passed the obstacle and can start returning
-  // // to the path; stop biasing the bypass.
-  // if (resume_idx < resume_offset) {
-  //   reportStatus("INACTIVE: obstacle nearly passed (resume point within look-ahead)");
-  //   bypass_active_ = false;
-  //   last_bypass_sign_ = 0.0f;
-  //   return;
-  // }
 
   // Midpoint of blocked region to score against. The path is being continuously
   // pruned, so the blocked_idx is updated and adjusted forward as the robot moves
@@ -489,17 +478,6 @@ void ObstacleBypassCritic::score(CriticData & data)
     last_bypass_sign_ = 0.0f;
     return;  // No valid bypass found
   }
-
-  // taper only once the robot is alongside/past the block (blocked_idx ≈ 0);
-  // // while still approaching (free path before the block) keep full offset.
-  // float taper = 1.0f;
-  // if (blocked_idx == 0) {                          // robot is at/inside the blocked span
-  //   taper = std::min(1.0f, float(resume_idx) / float(resume_offset));
-  // }
-  // signed_offset *= taper;                           // full while obstacle is beside you,
-  //                                                   // → 0 as its tail (resume_idx) exits
-
-  // RCLCPP_INFO_STREAM(logger_, "Taper: " << taper << " resume_idx: " << resume_idx << " blocked_idx: " << blocked_idx);
 
   // Score against a forward-looking target point offset from the path
   // in the direction of the bypass to incentivize trajectories to steer around
