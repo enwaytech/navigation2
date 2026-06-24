@@ -57,5 +57,9 @@
       <description>mppi critic for limiting linear velocity based on angular velocity</description>
     </class>
 
+    <class type="mppi::critics::PathDeviationSpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic for limiting linear velocity based on deviation from path</description>
+    </class>
+
   </library>
 </class_libraries>
