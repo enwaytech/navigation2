@@ -91,6 +91,7 @@ add_library(mppi_critics SHARED
   src/critics/obstacles_critic.cpp
   src/critics/path_align_critic.cpp
   src/critics/path_angle_critic.cpp
+  src/critics/path_deviation_speed_limit_critic.cpp
   src/critics/path_follow_critic.cpp
   src/critics/prefer_forward_critic.cpp
   src/critics/twirling_critic.cpp
