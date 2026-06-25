@@ -68,29 +68,43 @@ void PathDeviationSpeedLimitCritic::score(CriticData & data)
     return;
   }
 
-  utils::setPathFurthestPointIfNotSet(data);
-  const size_t path_end = *data.furthest_reached_path_point + 1;
-
-  // TODO
   const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
   const float rx = static_cast<float>(robot_pose.position.x);
   const float ry = static_cast<float>(robot_pose.position.y);
 
-  float min_dist_sq = std::numeric_limits<float>::max();
-  for (size_t p = 0; p < path_end; ++p) {
-    const float dx = rx - data.path.x(p);
-    const float dy = ry - data.path.y(p);
-    min_dist_sq = std::min(min_dist_sq, dx * dx + dy * dy);
+  // Path is pruned each iteration — the nearest path point is always index 0.
+  const float ref_dx = rx - data.path.x(0);
+  const float ref_dy = ry - data.path.y(0);
+
+  // Compute path tangent from consecutive points; fall back to stored yaw if degenerate.
+  float ux, uy;
+  if (data.path.x.size() >= 2) {
+    const float tx = data.path.x(1) - data.path.x(0);
+    const float ty = data.path.y(1) - data.path.y(0);
+    const float tlen = std::sqrt(tx * tx + ty * ty);
+    if (tlen >= 1e-6f) {
+      ux = tx / tlen;
+      uy = ty / tlen;
+    } else {
+      ux = std::cos(data.path.yaws(0));
+      uy = std::sin(data.path.yaws(0));
+    }
+  } else {
+    ux = std::cos(data.path.yaws(0));
+    uy = std::sin(data.path.yaws(0));
   }
-  const float min_dist = std::sqrt(min_dist_sq);
+
+  // Cross-track error: d · n, where n = (-uy, ux) is the path normal.
+  const float cross_track_err = std::abs(-ref_dx * uy + ref_dy * ux);
 
   // no penalty below min_deviation_
-  if (min_dist < min_deviation_) {
+  if (cross_track_err < min_deviation_) {
     return;
   }
 
   const float dev_ratio =
-    std::clamp((min_dist - min_deviation_) / (max_deviation_ - min_deviation_), 0.f, 1.f);
+    std::clamp(
+      (cross_track_err - min_deviation_) / (max_deviation_ - min_deviation_), 0.f, 1.f);
   const float allowed_vx = max_speed_ - dev_ratio * (max_speed_ - min_speed_);
 
   const auto violation = (data.state.vx - allowed_vx).max(0.0f);
