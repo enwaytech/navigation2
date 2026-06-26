@@ -61,5 +61,8 @@
       <description>mppi critic for limiting linear velocity based on deviation from path</description>
     </class>
 
+    <class type="mppi::critics::CostSpeedLimitCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic for limiting linear speed based on costmap's inflated cost</description>
+    </class>
   </library>
 </class_libraries>
