@@ -22,42 +22,23 @@ void PathDeviationSpeedLimitCritic::initialize()
   auto getParam = parameters_handler_->getParamGetter(name_);
 
   getParam(min_speed_, "min_speed", 0.6f);
-  getParam(max_speed_, "max_speed", 2.0f);
   getParam(min_deviation_, "min_deviation", 0.5f);
-  getParam(max_deviation_, "max_deviation", 1.5f);
   getParam(weight_, "cost_weight", 5.0f);
   getParam(power_, "cost_power", 1);
 
   constexpr float kMinPositive = 1e-3f;
-  if (max_deviation_ <= 0.0f) {
+  if (min_deviation_ <= 0.0f) {
     RCLCPP_WARN_STREAM(
       logger_,
-      "max_deviation must be > 0, got " << max_deviation_ << " — clamping to " <<
+      "min_deviation must be > 0, got " << min_deviation_ << " — clamping to " <<
         kMinPositive);
-    max_deviation_ = kMinPositive;
-  }
-  if (min_speed_ > max_speed_) {
-    RCLCPP_WARN_STREAM(
-      logger_,
-      "min_speed (" << min_speed_ << ") must be <= max_speed (" << max_speed_ <<
-        ") — clamping min_speed to max_speed");
-    min_speed_ = max_speed_;
-  }
-
-  if (min_deviation_ > max_deviation_) {
-    RCLCPP_WARN_STREAM(
-      logger_,
-      "min_deviation (" << min_deviation_ << ") must be <= max_deviation (" << max_deviation_ <<
-        ") — clamping min_deviation to max_deviation");
-    min_deviation_ = max_deviation_;
+    min_deviation_ = kMinPositive;
   }
 
   RCLCPP_INFO_STREAM(
     logger_,
     "PathDeviationSpeedLimitCritic instantiated with"
       " min_deviation=" << min_deviation_ <<
-      ", max_deviation=" << max_deviation_ <<
-      ", max_speed=" << max_speed_ <<
       ", min_speed=" << min_speed_ <<
       ", weight=" << weight_);
 }
@@ -102,12 +83,7 @@ void PathDeviationSpeedLimitCritic::score(CriticData & data)
     return;
   }
 
-  const float dev_ratio =
-    std::clamp(
-      (cross_track_err - min_deviation_) / (max_deviation_ - min_deviation_), 0.f, 1.f);
-  const float allowed_vx = max_speed_ - dev_ratio * (max_speed_ - min_speed_);
-
-  const auto violation = (data.state.vx - allowed_vx).max(0.0f);
+  const auto violation = (data.state.vx.abs() - min_speed_).max(0.0f);
   const auto per_traj = (violation * data.model_dt).rowwise().sum().eval();
 
   if (power_ > 1u) {
