@@ -65,8 +65,7 @@ protected:
   float max_speed_{0};
   float weight_{0};
   unsigned int power_{0};
-  int trajectory_point_step_{1};
-  int max_trajectory_steps_{60};
+  // unsigned int trajectory_point_step_;
   std::string inflation_layer_name_;
 
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *>
