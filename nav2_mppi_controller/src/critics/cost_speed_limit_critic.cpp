@@ -27,8 +27,7 @@ CostSpeedLimitCritic::initialize()
   getParam(max_speed_, "max_speed", 2.0f);
   getParam(weight_, "cost_weight", 5.0f);
   getParam(power_, "cost_power", 1);
-  getParam(trajectory_point_step_, "trajectory_point_step", 4);
-  getParam(max_trajectory_steps_, "max_trajectory_steps", 60);
+  // getParam(trajectory_point_step_, "trajectory_point_step", 2);
   getParam(inflation_layer_name_, "inflation_layer_name", std::string(""));
 
   constexpr float kMinPositive = 1e-3f;
@@ -89,7 +88,6 @@ CostSpeedLimitCritic::score(CriticData& data)
     return;
   }
 
-  /*
   // version 1: only apply at base_link
   const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
   const float rx = static_cast<float>(robot_pose.position.x);
@@ -117,50 +115,61 @@ CostSpeedLimitCritic::score(CriticData& data)
   } else {
     data.costs += (per_traj * weight_).eval();
   }
-  */
 
+  /*
   // version 2: penalize over strided trajectories
-  const int capped_cols = std::min(static_cast<int>(data.trajectories.x.cols()), max_trajectory_steps_);
-  const int strided_traj_cols = floor((capped_cols - 1) / trajectory_point_step_) + 1;
-  const int strided_traj_rows = data.trajectories.x.rows();
-  const int outer_stride = strided_traj_rows * trajectory_point_step_;
+
+  int strided_traj_cols = floor((data.trajectories.x.cols() - 1) / trajectory_point_step_) + 1;
+  int strided_traj_rows = data.trajectories.x.rows();
+  int outer_stride = strided_traj_rows * trajectory_point_step_;
 
   const auto traj_x = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>(
-    data.trajectories.x.data(), strided_traj_rows, strided_traj_cols,
-    Eigen::Stride<-1, -1>(outer_stride, 1));
+      data.trajectories.x.data(), strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
   const auto traj_y = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>(
-    data.trajectories.y.data(), strided_traj_rows, strided_traj_cols,
-    Eigen::Stride<-1, -1>(outer_stride, 1));
-  const auto traj_vx = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>(
-    data.state.vx.data(), strided_traj_rows, strided_traj_cols,
-    Eigen::Stride<-1, -1>(outer_stride, 1));
+      data.trajectories.y.data(), strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
+  // const auto traj_yaw = Eigen::Map<const Eigen::ArrayXXf, 0,
+  //     Eigen::Stride<-1, -1>>(
+  //   data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
+  //   Eigen::Stride<-1, -1>(outer_stride, 1));
 
-  Eigen::ArrayXf traj_cost(strided_traj_rows);
-  traj_cost.setZero();
+  for (int i = 0; i < strided_traj_rows; ++i)
+  {
+    bool trajectory_collide = false;
+    float pose_cost = 0.0f;
 
-  for (int i = 0; i < strided_traj_rows; i++) {
-    for (int j = 0; j < strided_traj_cols; j++) {
-      const float pose_cost = costAtPose(traj_x(i, j), traj_y(i, j));
-      if (pose_cost < 1.0f || pose_cost == static_cast<float>(nav2_costmap_2d::NO_INFORMATION)) {
-        continue;
+    for (int j = 0; j < strided_traj_cols; j++)
+    {
+      const float pose_cost = costAtPose(traj.x(i, j), traj.y(i, j));
+      if (pose_cost < 1.0f) {
+        continue;  // In free space
       }
 
+      // TODO check obstacleCritic to see how they do it and what other setup we need
       const float dist_to_obj = distanceToObstacle(pose_cost);
-      if (dist_to_obj > onset_distance_) {
+      // TODO add inscribed radius or footprint side offset, to be the same as CP.
+      // OR, already add the signed offset to the onset_dist in the params
+      if (dist_to_obj > onset_distance_)
+      {
         continue;
       }
+      const auto allowed_speed = min_speed_ + dist_to_obj * (max_speed_ - min_speed_);
 
-      const float dist_ratio = std::clamp(dist_to_obj / onset_distance_, 0.f, 1.f);
-      const float allowed_vx = min_speed_ + dist_ratio * (max_speed_ - min_speed_);
-      traj_cost(i) += std::max(0.f, std::abs(traj_vx(i, j)) - allowed_vx) * data.model_dt;
-    }
-  }
+      // TODO penalize if state.vx at point is > allowed speed
+      // TODO find a nicer way to do it with Eigen
 
-  if (power_ > 1u) {
-    data.costs += (traj_cost * weight_).pow(power_).eval();
-  } else {
-    data.costs += (traj_cost * weight_).eval();
+      if (pose_cost > onset_dis_cost)
+      {
+        // TODO compute allowed speed for the cost
+        // TODO actually cost is not linear, so should reverse engineer the formula in
+        // const auto allowed_speed = min_speed_ +
+        // (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
+
+        // TODO here we penalize speed
+        // TODO should I penalize per point over speed or for the
+      }
   }
+      */
+
 }
 
 float
@@ -181,6 +190,9 @@ CostSpeedLimitCritic::distanceToObstacle(const float cost)
   const float inscribed_radius = costmap_ros_->getLayeredCostmap()->getInscribedRadius();
   constexpr float constant_log = log(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE - 1);
   float dist_to_obj = inscribed_radius - (log(cost) - constant_log) / scale_factor;
+
+  // TODO divide by resolution?
+  // const double resolution = costmap->getCostmap()->getResolution();
 
   // the distance is computed at base_link cost so
   // substract the inscribed radius to get the closest distance to the object
