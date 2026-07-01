@@ -95,7 +95,6 @@ protected:
    */
   void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked, int id);
 
-  size_t offset_from_furthest_{0};
   size_t target_offset_from_furthest_{0};
   float threshold_to_consider_{0};
   float min_distance_occupancy_check_{0};

@@ -30,7 +30,6 @@ void ObstacleBypassCritic::initialize()
   getParam(weight_, "cost_weight", 4.667f);
   getParam(min_distance_occupancy_check_, "min_distance_occupancy_check", 2.0f);
   getParam(max_path_occupancy_ratio_, "max_path_occupancy_ratio", 0.07f);
-  getParam(offset_from_furthest_, "offset_from_furthest", 20);
   getParam(target_offset_from_furthest_, "target_offset_from_furthest", 20);
   getParam(threshold_to_consider_, "threshold_to_consider", 0.5f);
   getParam(bypass_offset_dist_, "bypass_offset_dist", 1.0f);
@@ -283,7 +282,6 @@ void ObstacleBypassCritic::score(CriticData & data)
     return;
   }
 
-  // Don't apply when first getting bearing w.r.t. the path
   utils::setPathFurthestPointIfNotSet(data);
   const size_t furthest_reached_path_point = *data.furthest_reached_path_point;
 
@@ -304,13 +302,36 @@ void ObstacleBypassCritic::score(CriticData & data)
     furthest_point_pub_->publish(std::move(furthest_point));
   }
 
-  if (furthest_reached_path_point < offset_from_furthest_) {
-    reportStatus("INACTIVE: not enough path traversed yet to get bearing");
-    return;
+  const size_t path_segments_count = data.path.x.size() - 1;
+
+  // Don't apply while the robot is moving AWAY from the look-ahead target (on the path)
+  // This keeps it off when reversing away from an obstacle
+  {
+    const size_t lookahead_idx = std::min(
+      furthest_reached_path_point + target_offset_from_furthest_, path_segments_count - 1);
+    const float robot_to_lookahead_x = data.path.x(lookahead_idx) - static_cast<float>(data.state.pose.pose.position.x);
+    const float robot_to_lookahead_y = data.path.y(lookahead_idx) - static_cast<float>(data.state.pose.pose.position.y);
+
+    const auto & q = data.state.pose.pose.orientation;
+    const float cyaw = 1.0f - 2.0f * static_cast<float>(q.y * q.y + q.z * q.z);
+    const float syaw = 2.0f * static_cast<float>(q.x * q.y + q.w * q.z);
+    const float vx = static_cast<float>(data.state.robot_speed.linear.x);
+    const float vy = static_cast<float>(data.state.robot_speed.linear.y);
+    const float world_vx = vx * cyaw - vy * syaw;
+    const float world_vy = vx * syaw + vy * cyaw;
+
+    // Deadband: only judge direction when actually moving; at a standstill keep the critic active
+    constexpr float speed_deadband_sq = 0.05f * 0.05f;
+    const float speed_sq = world_vx * world_vx + world_vy * world_vy;
+    if (speed_sq > speed_deadband_sq &&
+      (world_vx * robot_to_lookahead_x + world_vy * robot_to_lookahead_y) < 0.0f)
+    {
+      reportStatus("INACTIVE: moving away from the look-ahead target");
+      return;
+    }
   }
 
   // Find the first path IDX further than max(min_distance_occ_check, furthest_reached_path_point)
-  const size_t path_segments_count = data.path.x.size() - 1;
   size_t occupancy_check_distance_idx = 0;
   float dx = 0.0f, dy = 0.0f, path_dist = 0.0f;
   for (unsigned int i = 1; i != path_segments_count; i++) {
