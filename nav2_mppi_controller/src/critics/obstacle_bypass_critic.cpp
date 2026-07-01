@@ -31,6 +31,7 @@ void ObstacleBypassCritic::initialize()
   getParam(min_distance_occupancy_check_, "min_distance_occupancy_check", 2.0f);
   getParam(max_path_occupancy_ratio_, "max_path_occupancy_ratio", 0.07f);
   getParam(target_offset_from_furthest_, "target_offset_from_furthest", 20);
+  getParam(resume_offset_, "resume_offset", 20);
   getParam(threshold_to_consider_, "threshold_to_consider", 0.5f);
   getParam(bypass_offset_dist_, "bypass_offset_dist", 1.0f);
 
@@ -413,7 +414,15 @@ void ObstacleBypassCritic::score(CriticData & data)
 
   // If blocked until the end of the path, don't activate bypass
   if (resume_idx >= path_pts_valid.size()) {
-    reportStatus("INACTIVE: path blocked through the end of the local horizon");
+    reportStatus("INACTIVE: path blocked until the end of the path");
+    bypass_active_ = false;
+    last_bypass_sign_ = 0.0f;
+    return;
+  }
+
+  // Don't apply if the first valid path point past the blocked region is already near
+  if (resume_idx < resume_offset_) {
+    reportStatus("INACTIVE: obstacle nearly passed (resume point within look-ahead)");
     bypass_active_ = false;
     last_bypass_sign_ = 0.0f;
     return;
