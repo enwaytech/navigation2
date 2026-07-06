@@ -134,7 +134,7 @@ controller_server:
       reject_unit_path: false
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
+      time_steps: 100
       model_dt: 0.05
       batch_size: 2000
       open_loop: false
@@ -510,10 +510,10 @@ velocity_smoother:
     enable_stamped_cmd_vel: false
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.5, 0.0, 2.0]
-    min_velocity: [-0.5, 0.0, -2.0]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
+    max_velocity: [0.5, 0.0, 0.85]
+    min_velocity: [-0.5, 0.0, -0.85]
+    max_accel: [1.7, 0.0, 0.6]
+    max_decel: [-1.7, 0.0, -0.6]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
