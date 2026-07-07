@@ -154,6 +154,7 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
+      clamp_raw_controls: false
       regenerate_noises: true
       Visualization:
         publish_critics_stats: false

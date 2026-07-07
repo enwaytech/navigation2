@@ -60,10 +60,12 @@ public:
     * @param control_constraints Constraints on control
     * @param model_dt duration of a time step
     */
-  void initialize(const models::ControlConstraints & control_constraints, float model_dt)
+  void initialize(const models::ControlConstraints & control_constraints, float model_dt,
+    bool clamp_raw_controls)
   {
     control_constraints_ = control_constraints;
     model_dt_ = model_dt;
+    clamp_raw_controls_ = clamp_raw_controls;
   }
 
   /**
@@ -93,10 +95,16 @@ public:
       state.vx.col(i) = state.cvx.col(i - 1)
         .cwiseMax(lower_bound_vx)
         .cwiseMin(upper_bound_vx);
+      if (clamp_raw_controls_) {
+        state.cvx.col(i - 1) = state.vx.col(i);
+      }
 
       state.wz.col(i) = state.cwz.col(i - 1)
         .cwiseMax(state.wz.col(i - 1) - max_delta_wz)
         .cwiseMin(state.wz.col(i - 1) + max_delta_wz);
+      if (clamp_raw_controls_) {
+        state.cwz.col(i - 1) = state.wz.col(i);
+      }
 
       if (is_holo) {
         auto lower_bound_vy = (state.vy.col(i - 1) >
@@ -110,6 +118,9 @@ public:
         state.vy.col(i) = state.cvy.col(i - 1)
           .cwiseMax(lower_bound_vy)
           .cwiseMin(upper_bound_vy);
+        if (clamp_raw_controls_) {
+          state.cvy.col(i - 1) = state.vy.col(i);
+        }
       }
     }
   }
@@ -128,6 +139,7 @@ public:
 
 protected:
   float model_dt_{0.0};
+  bool clamp_raw_controls_{false};
   models::ControlConstraints control_constraints_{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     0.0f, 0.0f};
 };

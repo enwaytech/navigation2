@@ -102,6 +102,7 @@ void Optimizer::getParams()
   }
 
   getParam(s.model_dt, "model_dt", 0.05f);
+  getParam(s.clamp_raw_controls, "clamp_raw_controls", false);
   getParam(s.time_steps, "time_steps", 56);
   getParam(s.batch_size, "batch_size", 1000);
   getParam(s.iteration_count, "iteration_count", 1);
@@ -195,7 +196,7 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   generated_trajectories_.reset(settings_.batch_size, settings_.time_steps);
 
   noise_generator_.reset(settings_, isHolonomic());
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(settings_.constraints, settings_.model_dt, settings_.clamp_raw_controls);
   trajectory_validator_->initialize(
     parent_, name_ + ".TrajectoryValidator",
     costmap_ros_, parameters_handler_, tf_buffer_, settings_);
@@ -670,7 +671,7 @@ void Optimizer::setMotionModel(const std::string & model)
               "Model " + model + " is not valid! Valid options are DiffDrive, Omni, "
               "or Ackermann"));
   }
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(settings_.constraints, settings_.model_dt, settings_.clamp_raw_controls);
 }
 
 void Optimizer::setSpeedLimit(double speed_limit, bool percentage)
@@ -698,7 +699,7 @@ void Optimizer::setSpeedLimit(double speed_limit, bool percentage)
       s.constraints.wz = s.base_constraints.wz * ratio;
     }
   }
-  motion_model_->initialize(settings_.constraints, settings_.model_dt);
+  motion_model_->initialize(settings_.constraints, settings_.model_dt, settings_.clamp_raw_controls);
 }
 
 models::Trajectories & Optimizer::getGeneratedTrajectories()
