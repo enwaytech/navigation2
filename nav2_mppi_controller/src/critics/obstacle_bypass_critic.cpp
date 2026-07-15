@@ -305,33 +305,6 @@ void ObstacleBypassCritic::score(CriticData & data)
 
   const size_t path_segments_count = data.path.x.size() - 1;
 
-  // Don't apply while the robot is moving AWAY from the look-ahead target (on the path)
-  // This keeps it off when reversing away from an obstacle
-  {
-    const size_t lookahead_idx = std::min(
-      furthest_reached_path_point + target_offset_from_furthest_, path_segments_count - 1);
-    const float robot_to_lookahead_x = data.path.x(lookahead_idx) - static_cast<float>(data.state.pose.pose.position.x);
-    const float robot_to_lookahead_y = data.path.y(lookahead_idx) - static_cast<float>(data.state.pose.pose.position.y);
-
-    const auto & q = data.state.pose.pose.orientation;
-    const float cyaw = 1.0f - 2.0f * static_cast<float>(q.y * q.y + q.z * q.z);
-    const float syaw = 2.0f * static_cast<float>(q.x * q.y + q.w * q.z);
-    const float vx = static_cast<float>(data.state.robot_speed.linear.x);
-    const float vy = static_cast<float>(data.state.robot_speed.linear.y);
-    const float world_vx = vx * cyaw - vy * syaw;
-    const float world_vy = vx * syaw + vy * cyaw;
-
-    // Deadband: only judge direction when actually moving; at a standstill keep the critic active
-    constexpr float speed_deadband_sq = 0.05f * 0.05f;
-    const float speed_sq = world_vx * world_vx + world_vy * world_vy;
-    if (speed_sq > speed_deadband_sq &&
-      (world_vx * robot_to_lookahead_x + world_vy * robot_to_lookahead_y) < 0.0f)
-    {
-      reportStatus("INACTIVE: moving away from the look-ahead target");
-      return;
-    }
-  }
-
   // Find the first path IDX further than max(min_distance_occ_check, furthest_reached_path_point)
   size_t occupancy_check_distance_idx = 0;
   float dx = 0.0f, dy = 0.0f, path_dist = 0.0f;
@@ -514,6 +487,29 @@ void ObstacleBypassCritic::score(CriticData & data)
   // the obstacle in the direction with the least disruption to path tracking.
   const float target_x = target_base_x + signed_offset * perp_x;
   const float target_y = target_base_y + signed_offset * perp_y;
+
+  // Don't apply while the robot is moving AWAY from the target (on the path)
+  // This keeps it off when reversing away from an obstacle
+  {
+    const auto & q = robot_pose.orientation;
+    const float cyaw = 1.0f - 2.0f * static_cast<float>(q.y * q.y + q.z * q.z);
+    const float syaw = 2.0f * static_cast<float>(q.x * q.y + q.w * q.z);
+    const float vx = static_cast<float>(data.state.robot_speed.linear.x);
+    const float vy = static_cast<float>(data.state.robot_speed.linear.y);
+    const float world_vx = vx * cyaw - vy * syaw;
+    const float world_vy = vx * syaw + vy * cyaw;
+    const float to_tx = target_x - static_cast<float>(robot_pose.position.x);
+    const float to_ty = target_y - static_cast<float>(robot_pose.position.y);
+    // Deadband: only judge direction when actually moving; at a standstill keep pushing.
+    constexpr float speed_deadband_sq = 0.05f * 0.05f;
+    if ((world_vx * world_vx + world_vy * world_vy) > speed_deadband_sq &&
+      (world_vx * to_tx + world_vy * to_ty) < 0.0f)
+    {
+      reportStatus("INACTIVE: moving away from the bypass target");
+      bypass_active_ = false;
+      return;
+    }
+  }
 
   const int last_idx = data.trajectories.y.cols() - 1;
   const auto diff_x = target_x - data.trajectories.x.col(last_idx);
