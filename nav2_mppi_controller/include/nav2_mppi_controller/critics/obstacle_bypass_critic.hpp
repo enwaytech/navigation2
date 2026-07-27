@@ -80,18 +80,25 @@ protected:
     float & signed_offset);
 
   /**
-   * @brief Log a one-line bypass status, but only when it differs from the last
-   * logged one, so the message is readable and does not spam at control rate.
-   * @param status Human-readable status / reason string
+   * @brief Log a one-line bypass status at DEBUG level, once per transition.
    */
   void reportStatus(const std::string & status);
 
   /**
-   * @brief Publish the lateral reachability check segment for debugging.
-   * @param x0,y0 Segment start (last free path point)
-   * @param x1,y1 Segment end (offset endpoint, or the blocking cell if blocked)
-   * @param blocked Whether the sweep hit a lethal cell (colors the line red)
-   * @param id Marker id (distinguishes the preferred vs alternate side)
+   * @brief Report the status, deactivate the bypass and clear the remembered side.
+   */
+  void deactivate(const std::string & status);
+
+  /**
+   * @brief Publish a pose.
+   */
+  void publishPose(
+    const nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr & pub,
+    double x, double y, double yaw);
+
+  /**
+   * @brief Publish the robot->corridor reachability check segment for debugging
+   * (green if clear, red if it hit a lethal cell). @param id distinguishes sides.
    */
   void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked, int id);
 
@@ -101,9 +108,7 @@ protected:
   float min_distance_occupancy_check_{0};
   float max_path_occupancy_ratio_{0};
   float bypass_offset_dist_{0};
-  // Side chosen on the last active cycle (+1 left, -1 right, 0 none); kept across
-  // the transient "not enough path traversed" gate to stabilize the side, reset
-  // when the obstacle is resolved/passed.
+  // Side chosen on the last active cycle (+1 left, -1 right, 0 none). reset when the obstacle is passed.
   float last_bypass_sign_{0.0f};
   unsigned int power_{0};
   float weight_{0};
@@ -119,12 +124,11 @@ protected:
   nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_point_pub_;
 
   bool visualize_blocked_point_{false};
-  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr blocked_point_pub_;
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr blocked_point_pub_; // TODO rm
 
   bool visualize_check_line_{false};
   nav2::Publisher<visualization_msgs::msg::Marker>::SharedPtr check_line_pub_;
 
-  // Last status logged by reportStatus(); used to suppress repeated messages.
   std::string last_status_;
 };
 
