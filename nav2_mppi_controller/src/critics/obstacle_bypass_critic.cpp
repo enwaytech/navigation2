@@ -38,7 +38,6 @@ void ObstacleBypassCritic::initialize()
   getParam(visualize_furthest_point_, "visualize_furthest_point", false);
   getParam(visualize_occupancy_check_distance_, "visualize_occupancy_check_distance", false);
   getParam(visualize_target_point_, "visualize_target_point", false);
-  getParam(visualize_blocked_point_, "visualize_blocked_point", false);
   getParam(visualize_check_line_, "visualize_check_line", false);
 
   if (auto node = parent_.lock()) {
@@ -56,8 +55,6 @@ void ObstacleBypassCritic::initialize()
       make_pose_pub(visualize_occupancy_check_distance_, "/critics/ObstacleBypassCritic/occupancy_check_end_point");
     target_point_pub_ =
       make_pose_pub(visualize_target_point_, "/critics/ObstacleBypassCritic/target_point");
-    blocked_point_pub_ =
-      make_pose_pub(visualize_blocked_point_, "/critics/ObstacleBypassCritic/blocked_point");
     if (visualize_check_line_) {
       check_line_pub_ = node->create_publisher<visualization_msgs::msg::Marker>(
           "/critics/ObstacleBypassCritic/reachability_check_line", 1);
@@ -312,9 +309,6 @@ void ObstacleBypassCritic::score(CriticData & data)
   for (size_t j = 0; j < occupancy_check_distance_idx; j++) {
     if (!path_pts_valid[j]) {blocked_idx = j; break;}
   }
-  publishPose(
-    (blocked_idx > 0) ? blocked_point_pub_ : nullptr, data.path.x(blocked_idx),
-    data.path.y(blocked_idx), data.path.yaws(blocked_idx));
 
   // Find first valid path point past the blocked region
   size_t resume_idx = blocked_idx;

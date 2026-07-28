@@ -123,9 +123,6 @@ protected:
   bool visualize_target_point_{false};
   nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_point_pub_;
 
-  bool visualize_blocked_point_{false};
-  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr blocked_point_pub_; // TODO rm
-
   bool visualize_check_line_{false};
   nav2::Publisher<visualization_msgs::msg::Marker>::SharedPtr check_line_pub_;
 
