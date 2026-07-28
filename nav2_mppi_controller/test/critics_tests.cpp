@@ -921,7 +921,7 @@ TEST(CriticTests, ObstacleBypassCritic)
   // findPathCosts marks indices 20-25 invalid from costmap. 5 counted (0..24).
   // occupancy_ratio=5/25=0.2, path_blocked=true
   // blocked_idx=20, resume_idx=26, obstacle_idx=23, path_yaw=0
-  // determineBestBypassSide: left preferred (fewer lethal+inflated cells above path)
+  // computeBypassTarget: left preferred (fewer lethal+inflated cells above path)
   // signed_offset = +(4*0.1+1.0) = +1.4, target_idx=45, target=(5.0, 3.9)
   data.path_pts_valid = std::nullopt;
   data.furthest_reached_path_point = 25;
@@ -1031,7 +1031,7 @@ TEST(CriticTests, ObstacleBypassCritic)
   path.x(22) = saved_x22;
   path.x(23) = saved_x23;
 
-  // -- Scenario 11: Both sides blocked (determineBestBypassSide returns false) --
+  // -- Scenario 11: Both sides blocked (computeBypassTarget returns nullopt) --
   for (unsigned int i = 0; i < costmap->getSizeInCellsX(); ++i) {
     for (unsigned int j = 0; j < costmap->getSizeInCellsY(); ++j) {
       costmap->setCost(i, j, nav2_costmap_2d::LETHAL_OBSTACLE);

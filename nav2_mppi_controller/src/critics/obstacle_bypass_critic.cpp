@@ -100,7 +100,7 @@ void ObstacleBypassCritic::publishPose(
 }
 
 void ObstacleBypassCritic::publishCheckLine(
-  float x0, float y0, float x1, float y1, bool blocked, int id)
+  float x0, float y0, float x1, float y1, bool blocked)
 {
   if (!check_line_pub_ || check_line_pub_->get_subscription_count() == 0) {
     return;
@@ -109,7 +109,7 @@ void ObstacleBypassCritic::publishCheckLine(
   marker->header.frame_id = costmap_ros_->getGlobalFrameID();
   marker->header.stamp = clock_->now();
   marker->ns = "bypass_reachability_check";
-  marker->id = id;
+  marker->id = 0;
   marker->type = visualization_msgs::msg::Marker::LINE_STRIP;
   marker->action = visualization_msgs::msg::Marker::ADD;
   marker->scale.x = 0.03;
@@ -126,9 +126,9 @@ void ObstacleBypassCritic::publishCheckLine(
   check_line_pub_->publish(std::move(marker));
 }
 
-std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determineBestBypassSide(
+std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeBypassTarget(
   const models::Path & path, float robot_x, float robot_y,
-  size_t obstacle_idx, size_t free_idx, size_t target_idx, float prev_sign)
+  size_t obstacle_idx, size_t last_free_idx, size_t target_idx, float prev_sign)
 {
   const float resolution = static_cast<float>(costmap_->getResolution());
   const bool tracking_unknown = costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
@@ -161,16 +161,16 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determin
     reportStatus("INACTIVE: degenerate path tangent at the obstacle");
     return std::nullopt;
   }
-  float target_x, target_y, target_nx, target_ny;
-  if (!frameAt(target_idx, target_x, target_y, target_nx, target_ny)) {
+  float target_base_x, target_base_y, target_nx, target_ny;
+  if (!frameAt(target_idx, target_base_x, target_base_y, target_nx, target_ny)) {
     reportStatus("INACTIVE: degenerate path tangent at the forward target");
     return std::nullopt;
   }
-  // free_idx == 0 means the block starts at the path start: no anchor, skip the line check.
-  // If the block starts at the first point (or no tangent there) skip the reachability line check
+  // last_free_idx == 0 means the block starts at the first path point:
+  // skip the reachability line check.
   float free_x = 0.0f, free_y = 0.0f, free_nx = 0.0f, free_ny = 0.0f;
   const bool check_reachability =
-    free_idx > 0 && frameAt(free_idx, free_x, free_y, free_nx, free_ny);
+    last_free_idx > 0 && frameAt(last_free_idx, free_x, free_y, free_nx, free_ny);
 
   // Scan perpendicular to the path to find the first non-lethal cell on each side.
   auto scanSide = [&](float sign) -> int {
@@ -187,14 +187,16 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determin
     };
 
   // A side is usable when:
-  // - the forward target cell is non-lethal
+  // - the target cell is in the map and non-lethal
   // - the target is reachable: the straight line from the robot to the offset point beside the last
   // free path point is clear of lethal cells
-  auto isSideReachable = [&](float offset, int viz_id) -> bool {
-      const float tx = target_x + offset * target_nx;
-      const float ty = target_y + offset * target_ny;
-      unsigned int tmx, tmy;
-      if (!costmap_->worldToMap(tx, ty, tmx, tmy) || !isNonLethal(costmap_->getCost(tmx, tmy))) {
+  auto isSideReachable = [&](float offset) -> bool {
+      const float target_x = target_base_x + offset * target_nx;
+      const float target_y = target_base_y + offset * target_ny;
+      unsigned int target_mx, target_my;
+      // check target cell is valid
+      if (!costmap_->worldToMap(target_x, target_y, target_mx, target_my) ||
+         !isNonLethal(costmap_->getCost(target_mx, target_my))) {
         return false;
       }
 
@@ -202,32 +204,33 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determin
         return true;
       }
 
-      unsigned int rmx, rmy;
-      if (!costmap_->worldToMap(robot_x, robot_y, rmx, rmy)) {
+      unsigned int robot_mx, robot_my;
+      if (!costmap_->worldToMap(robot_x, robot_y, robot_mx, robot_my)) {
         return true;  // Robot off the costmap: cannot run the line check.
       }
-      // Offset point beside the last free path point, on the candidate side.
-      const float ex = free_x + offset * free_nx;
-      const float ey = free_y + offset * free_ny;
-      unsigned int emx, emy;
-      if (!costmap_->worldToMap(ex, ey, emx, emy) || !isNonLethal(costmap_->getCost(emx, emy))) {
-        publishCheckLine(robot_x, robot_y, ex, ey, true, viz_id);
+      // line endpoint: Offset point beside the last free path point, on the candidate side.
+      const float end_x = free_x + offset * free_nx;
+      const float end_y = free_y + offset * free_ny;
+      unsigned int end_mx, end_my;
+      // check line endpoint is valid
+      if (!costmap_->worldToMap(end_x, end_y, end_mx, end_my) || !isNonLethal(costmap_->getCost(end_mx, end_my))) {
+        publishCheckLine(robot_x, robot_y, end_x, end_y, true);
         return false;
       }
 
-      float bx = ex, by = ey;
+      float line_blocked_x = end_x, line_blocked_y = end_y;
       bool blocked = false;
-      for (nav2_util::LineIterator line(rmx, rmy, emx, emy); line.isValid(); line.advance()) {
+      for (nav2_util::LineIterator line(robot_mx, robot_my, end_mx, end_my); line.isValid(); line.advance()) {
         if (!isNonLethal(costmap_->getCost(line.getX(), line.getY()))) {
           blocked = true;
-          double wbx, wby;
-          costmap_->mapToWorld(line.getX(), line.getY(), wbx, wby);
-          bx = static_cast<float>(wbx);
-          by = static_cast<float>(wby);
+          double line_blocked_x_d, line_blocked_y_d;
+          costmap_->mapToWorld(line.getX(), line.getY(), line_blocked_x_d, line_blocked_y_d);
+          line_blocked_x = static_cast<float>(line_blocked_x_d);
+          line_blocked_y = static_cast<float>(line_blocked_y_d);
           break;
         }
       }
-      publishCheckLine(robot_x, robot_y, bx, by, blocked, viz_id);
+      publishCheckLine(robot_x, robot_y, line_blocked_x, line_blocked_y, blocked);
       return !blocked;
     };
 
@@ -256,9 +259,9 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determin
       continue;
     }
     const float offset = sign * (first_free * resolution + bypass_offset_dist_);
-    if (isSideReachable(offset, attempt)) {
+    if (isSideReachable(offset)) {
       // Forward-looking target point offset from the path in the direction of the bypass
-      return BypassResult{target_x + offset * target_nx, target_y + offset * target_ny, sign};
+      return BypassResult{target_base_x + offset * target_nx, target_base_y + offset * target_ny, sign};
     }
   }
 
@@ -350,19 +353,19 @@ void ObstacleBypassCritic::score(CriticData & data)
   // Midpoint of blocked region to score against. Note that the path is being continuously
   // pruned, so the blocked_idx is updated and adjusted forward as the robot moves
   const size_t obstacle_idx = (blocked_idx + resume_idx) / 2;
-  // TODO rename to last_free
+
   // Last free path point before the obstacle for the reachability line check
-  const size_t free_idx = (blocked_idx > 1) ? blocked_idx - 1 : 0;
+  const size_t last_free_idx = (blocked_idx > 1) ? blocked_idx - 1 : 0;
 
   const size_t target_idx = std::min(
     furthest_reached_path_point + target_offset_from_furthest_, path_segments_count - 1);
 
   const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
-  const auto result = determineBestBypassSide(
+  const auto result = computeBypassTarget(
     data.path, static_cast<float>(robot_pose.position.x), static_cast<float>(robot_pose.position.y),
-    obstacle_idx, free_idx, target_idx, last_bypass_sign_);
+    obstacle_idx, last_free_idx, target_idx, last_bypass_sign_);
   if (!result) {
-    bypass_active_ = false;  // reason already reported by determineBestBypassSide()
+    bypass_active_ = false;  // reason already reported by computeBypassTarget()
     last_bypass_sign_ = 0.0f;
     return;
   }

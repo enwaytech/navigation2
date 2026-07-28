@@ -65,7 +65,7 @@ protected:
    * @param prev_sign Previously chosen side (+1/-1/0).
    * @return The resolved target and side, or nullopt if no usable side was found.
    */
-  std::optional<BypassResult> determineBestBypassSide(
+  std::optional<BypassResult> computeBypassTarget(
     const models::Path & path,
     float robot_x, float robot_y,
     size_t obstacle_idx, size_t free_idx, size_t target_idx,
@@ -90,9 +90,9 @@ protected:
 
   /**
    * @brief Publish the robot->corridor reachability check segment for debugging
-   * (green if clear, red if it hit a lethal cell). @param id distinguishes sides.
+   * (green if clear, red if it hit a lethal cell).
    */
-  void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked, int id);
+  void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked);
 
   size_t target_offset_from_furthest_{0};
   size_t resume_offset_{0};
