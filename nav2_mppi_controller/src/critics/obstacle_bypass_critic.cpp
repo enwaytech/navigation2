@@ -126,23 +126,15 @@ void ObstacleBypassCritic::publishCheckLine(
   check_line_pub_->publish(std::move(marker));
 }
 
-bool ObstacleBypassCritic::determineBestBypassSide(
-  float path_x, float path_y, float path_yaw,
-  float robot_x, float robot_y,
-  float free_x, float free_y, float free_perp_x, float free_perp_y,
-  float target_base_x, float target_base_y,
-  float target_perp_x, float target_perp_y,
-  bool check_reachability,
-  float prev_sign,
-  float & signed_offset)
+std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::determineBestBypassSide(
+  const models::Path & path, float robot_x, float robot_y,
+  size_t obstacle_idx, size_t free_idx, size_t target_idx, float prev_sign)
 {
-  const float perp_x = -sinf(path_yaw);
-  const float perp_y = cosf(path_yaw);
   const float resolution = static_cast<float>(costmap_->getResolution());
   const bool tracking_unknown = costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
-
   const int max_steps = static_cast<int>(
     std::max(costmap_->getSizeInCellsX(), costmap_->getSizeInCellsY()));
+  const size_t last_path_idx = static_cast<size_t>(path.x.size()) - 1;
   unsigned int mx, my;
 
   auto isNonLethal = [&](unsigned char c) {
@@ -150,11 +142,41 @@ bool ObstacleBypassCritic::determineBestBypassSide(
              (c != nav2_costmap_2d::NO_INFORMATION || tracking_unknown);
     };
 
+  // Point on the path at idx plus its unit left-normal; false if the local tangent is degenerate.
+  auto frameAt = [&](size_t idx, float & px, float & py, float & nx, float & ny) -> bool {
+      const size_t next = std::min(idx + 1, last_path_idx);
+      px = path.x(idx);
+      py = path.y(idx);
+      const float tx = path.x(next) - px;
+      const float ty = path.y(next) - py;
+      const float tangent_len = sqrtf(tx * tx + ty * ty);
+      if (tangent_len < 1e-6f) {return false;}
+      nx = -ty / tangent_len;
+      ny = tx / tangent_len;
+      return true;
+    };
+
+  float obs_x, obs_y, obs_nx, obs_ny;
+  if (!frameAt(obstacle_idx, obs_x, obs_y, obs_nx, obs_ny)) {
+    reportStatus("INACTIVE: degenerate path tangent at the obstacle");
+    return std::nullopt;
+  }
+  float target_x, target_y, target_nx, target_ny;
+  if (!frameAt(target_idx, target_x, target_y, target_nx, target_ny)) {
+    reportStatus("INACTIVE: degenerate path tangent at the forward target");
+    return std::nullopt;
+  }
+  // free_idx == 0 means the block starts at the path start: no anchor, skip the line check.
+  // If the block starts at the first point (or no tangent there) skip the reachability line check
+  float free_x = 0.0f, free_y = 0.0f, free_nx = 0.0f, free_ny = 0.0f;
+  const bool check_reachability =
+    free_idx > 0 && frameAt(free_idx, free_x, free_y, free_nx, free_ny);
+
   // Scan perpendicular to the path to find the first non-lethal cell on each side.
   auto scanSide = [&](float sign) -> int {
       for (int s = 1; s <= max_steps; ++s) {
-        float wx = path_x + sign * s * resolution * perp_x;
-        float wy = path_y + sign * s * resolution * perp_y;
+        const float wx = obs_x + sign * s * resolution * obs_nx;
+        const float wy = obs_y + sign * s * resolution * obs_ny;
         if (!costmap_->worldToMap(wx, wy, mx, my)) {
           return max_steps + 1;
         } else if (isNonLethal(costmap_->getCost(mx, my))) {
@@ -167,10 +189,10 @@ bool ObstacleBypassCritic::determineBestBypassSide(
   // A side is usable when:
   // - the forward target cell is non-lethal
   // - the target is reachable: the straight line from the robot to the offset point beside the last
-  // free path point (before the obstacle) is clear of lethal cells
-  auto isSideReachable = [&](float candidate_offset, int viz_id) -> bool {
-      const float tx = target_base_x + candidate_offset * target_perp_x;
-      const float ty = target_base_y + candidate_offset * target_perp_y;
+  // free path point is clear of lethal cells
+  auto isSideReachable = [&](float offset, int viz_id) -> bool {
+      const float tx = target_x + offset * target_nx;
+      const float ty = target_y + offset * target_ny;
       unsigned int tmx, tmy;
       if (!costmap_->worldToMap(tx, ty, tmx, tmy) || !isNonLethal(costmap_->getCost(tmx, tmy))) {
         return false;
@@ -184,10 +206,9 @@ bool ObstacleBypassCritic::determineBestBypassSide(
       if (!costmap_->worldToMap(robot_x, robot_y, rmx, rmy)) {
         return true;  // Robot off the costmap: cannot run the line check.
       }
-
       // Offset point beside the last free path point, on the candidate side.
-      const float ex = free_x + candidate_offset * free_perp_x;
-      const float ey = free_y + candidate_offset * free_perp_y;
+      const float ex = free_x + offset * free_nx;
+      const float ey = free_y + offset * free_ny;
       unsigned int emx, emy;
       if (!costmap_->worldToMap(ex, ey, emx, emy) || !isNonLethal(costmap_->getCost(emx, emy))) {
         publishCheckLine(robot_x, robot_y, ex, ey, true, viz_id);
@@ -214,12 +235,11 @@ bool ObstacleBypassCritic::determineBestBypassSide(
   const int first_free_right = scanSide(-1.0f);
   if (first_free_left > max_steps && first_free_right > max_steps) {
     reportStatus("INACTIVE: no free space on either side of the obstacle");
-    return false;
+    return std::nullopt;
   }
 
-  // Side hysteresis: keep the previous side while it still has free space
-  // otherwise take the side whose free space is closer, ties to left.
-  // Signed offset: + left, - right; distance = first free cell + margin.
+  // Side hysteresis: keep the previous side while it still has free space, otherwise take the
+  // side whose free space is closer (ties to left). Signed offset: + left, - right.
   float sign;
   if (prev_sign > 0.0f && first_free_left <= max_steps) {
     sign = 1.0f;
@@ -228,23 +248,22 @@ bool ObstacleBypassCritic::determineBestBypassSide(
   } else {
     sign = (first_free_left <= first_free_right) ? 1.0f : -1.0f;
   }
-  int first_free = (sign > 0.0f) ? first_free_left : first_free_right;
-  signed_offset = sign * (first_free * resolution + bypass_offset_dist_);
-  if (isSideReachable(signed_offset, 0)) {
-    return true;
-  }
 
-  // Preferred side unreachable: try the other side.
-  sign = -sign;
-  first_free = (sign > 0.0f) ? first_free_left : first_free_right;
-  if (first_free <= max_steps) {
-    signed_offset = sign * (first_free * resolution + bypass_offset_dist_);
-    if (isSideReachable(signed_offset, 1)) {
-      return true;
+  // Try the chosen side, then the other one.
+  for (int attempt = 0; attempt < 2; ++attempt, sign = -sign) {
+    const int first_free = (sign > 0.0f) ? first_free_left : first_free_right;
+    if (first_free > max_steps) {
+      continue;
+    }
+    const float offset = sign * (first_free * resolution + bypass_offset_dist_);
+    if (isSideReachable(offset, attempt)) {
+      // Forward-looking target point offset from the path in the direction of the bypass
+      return BypassResult{target_x + offset * target_nx, target_y + offset * target_ny, sign};
     }
   }
+
   reportStatus("INACTIVE: no reachable bypass side");
-  return false;
+  return std::nullopt;
 }
 
 void ObstacleBypassCritic::score(CriticData & data)
@@ -331,74 +350,26 @@ void ObstacleBypassCritic::score(CriticData & data)
   // Midpoint of blocked region to score against. Note that the path is being continuously
   // pruned, so the blocked_idx is updated and adjusted forward as the robot moves
   const size_t obstacle_idx = (blocked_idx + resume_idx) / 2;
-  // Compute path tangent from XY poses at the obstacle region
-  const size_t next_idx = std::min(obstacle_idx + 1, path_segments_count - 1);
-  const float path_x = data.path.x(obstacle_idx);
-  const float path_y = data.path.y(obstacle_idx);
-  const float tangent_x = data.path.x(next_idx) - path_x;
-  const float tangent_y = data.path.y(next_idx) - path_y;
-  const float tangent_len = sqrtf(tangent_x * tangent_x + tangent_y * tangent_y);
-  if (tangent_len < 1e-6f) {
-    deactivate("INACTIVE: degenerate path tangent at the obstacle");
-    return;
-  }
-  const float path_yaw = atan2f(tangent_y, tangent_x);
+  // TODO rename to last_free
+  // Last free path point before the obstacle for the reachability line check
+  const size_t free_idx = (blocked_idx > 1) ? blocked_idx - 1 : 0;
 
-  // If the block starts at the first point (or no tangent there) skip the reachability line check
-  bool check_reachability = blocked_idx > 1;
-  float free_x = path_x, free_y = path_y;
-  float free_perp_x = 0.0f, free_perp_y = 0.0f;
-  // Find the last free path point before the obstacle for the reachability line check
-  if (check_reachability) {
-    const size_t free_idx = blocked_idx - 1;
-    const size_t free_next = std::min(free_idx + 1, path_segments_count - 1);
-    const float free_tx = data.path.x(free_next) - data.path.x(free_idx);
-    const float free_ty = data.path.y(free_next) - data.path.y(free_idx);
-    const float free_tlen = sqrtf(free_tx * free_tx + free_ty * free_ty);
-    if (free_tlen < 1e-6f) {
-      check_reachability = false;
-    } else {
-      free_perp_x = -free_ty / free_tlen;
-      free_perp_y = free_tx / free_tlen;
-      free_x = data.path.x(free_idx);
-      free_y = data.path.y(free_idx);
-    }
-  }
-
-  // Forward-looking target point offset from the path in the direction of the bypass
-  // The critic is scored against this point to incentivize trajectories to steer around
-  // the obstacle in the direction with the least disruption to path tracking.
   const size_t target_idx = std::min(
     furthest_reached_path_point + target_offset_from_furthest_, path_segments_count - 1);
-  const size_t target_next = std::min(target_idx + 1, path_segments_count - 1);
-  const float target_tx = data.path.x(target_next) - data.path.x(target_idx);
-  const float target_ty = data.path.y(target_next) - data.path.y(target_idx);
-  const float target_tlen = sqrtf(target_tx * target_tx + target_ty * target_ty);
-  if (target_tlen < 1e-6f) {
-    deactivate("INACTIVE: degenerate path tangent at the forward target");
-    return;
-  }
-  const float perp_x = -target_ty / target_tlen;
-  const float perp_y = target_tx / target_tlen;
-  const float target_base_x = data.path.x(target_idx);
-  const float target_base_y = data.path.y(target_idx);
 
   const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
-  float signed_offset = 0.0f;
-  if (!determineBestBypassSide(
-      path_x, path_y, path_yaw,
-      static_cast<float>(robot_pose.position.x), static_cast<float>(robot_pose.position.y),
-      free_x, free_y, free_perp_x, free_perp_y,
-      target_base_x, target_base_y, perp_x, perp_y,
-      check_reachability, last_bypass_sign_, signed_offset))
-  {
-    bypass_active_ = false;
+  const auto result = determineBestBypassSide(
+    data.path, static_cast<float>(robot_pose.position.x), static_cast<float>(robot_pose.position.y),
+    obstacle_idx, free_idx, target_idx, last_bypass_sign_);
+  if (!result) {
+    bypass_active_ = false;  // reason already reported by determineBestBypassSide()
     last_bypass_sign_ = 0.0f;
     return;
   }
 
-  const float target_x = target_base_x + signed_offset * perp_x;
-  const float target_y = target_base_y + signed_offset * perp_y;
+  // Forward-looking target point offset from the path in the direction of the bypass
+  const float target_x = result->target_x;
+  const float target_y = result->target_y;
 
   // Don't apply while the robot is moving away from the target
   // This keeps it off when reversing away from an obstacle
@@ -422,7 +393,8 @@ void ObstacleBypassCritic::score(CriticData & data)
     }
   }
 
-  // score the trajectory endpoints against the target
+  // The critic is scored against the target to incentivize trajectories to steer around
+  // the obstacle in the direction with the least disruption to path tracking.
   const int last_idx = data.trajectories.y.cols() - 1;
   const auto diff_x = target_x - data.trajectories.x.col(last_idx);
   const auto diff_y = target_y - data.trajectories.y.col(last_idx);
@@ -433,9 +405,9 @@ void ObstacleBypassCritic::score(CriticData & data)
   }
 
   bypass_active_ = true;
-  last_bypass_sign_ = (signed_offset >= 0.0f) ? 1.0f : -1.0f;
-  reportStatus(signed_offset >= 0.0f ? "ACTIVE: bypassing left" : "ACTIVE: bypassing right");
-  publishPose(target_point_pub_, target_x, target_y, path_yaw);
+  last_bypass_sign_ = result->sign;
+  reportStatus(result->sign > 0.0f ? "ACTIVE: bypassing left" : "ACTIVE: bypassing right");
+  publishPose(target_point_pub_, target_x, target_y, data.path.yaws(target_idx));
 }
 
 }  // namespace mppi::critics

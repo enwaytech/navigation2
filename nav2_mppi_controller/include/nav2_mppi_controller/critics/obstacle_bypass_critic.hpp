@@ -15,9 +15,11 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__OBSTACLE_BYPASS_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__OBSTACLE_BYPASS_CRITIC_HPP_
 
+#include <optional>
 #include <string>
 
 #include "nav2_mppi_controller/critic_function.hpp"
+#include "nav2_mppi_controller/models/path.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
 #include "visualization_msgs/msg/marker.hpp"
@@ -46,38 +48,28 @@ public:
   void score(CriticData & data) override;
 
 protected:
+  struct BypassResult
+  {
+    float target_x;
+    float target_y;
+    float sign; // +1 left, -1 right
+  };
+
   /**
-   * @brief Determine the best side and distance to bypass an obstacle using costmap
-   * @param path_x X position on path at obstacle
-   * @param path_y Y position on path at obstacle
-   * @param path_yaw Yaw of path tangent at obstacle
-   * @param robot_x Robot X position (start of the reachability line check)
-   * @param robot_y Robot Y position (start of the reachability line check)
-   * @param free_x X of the last free path point before the obstacle
-   * @param free_y Y of the last free path point before the obstacle
-   * @param free_perp_x X of the unit (left) perpendicular at the last free point
-   * @param free_perp_y Y of the unit (left) perpendicular at the last free point
-   * @param target_base_x X of the forward-looking target base point on the path
-   * @param target_base_y Y of the forward-looking target base point on the path
-   * @param target_perp_x X of the unit perpendicular at the target base point
-   * @param target_perp_y Y of the unit perpendicular at the target base point
-   * @param check_reachability When false, skip the reachability line check
-   *   (used when there is no valid free-point anchor before the obstacle)
-   * @param prev_sign Previously chosen side (+1 left, -1 right, 0 none). The
-   *   chosen side stays on prev_sign as long as that side still has free space,
-   *   to avoid flip-flopping (hysteresis); otherwise the closer side is used.
-   * @param[out] signed_offset Signed offset distance (+ left, - right)
-   * @return true if a valid bypass target was found
+   * @brief Determine the best side and target to bypass an obstacle
+   * @param path The pruned local path.
+   * @param robot_x,robot_y Robot position.
+   * @param obstacle_idx Path index of the obstacle
+   * @param free_idx Path index of the last free point before the obstacle, or 0 if none.
+   * @param target_idx Path index of the forward-looking target.
+   * @param prev_sign Previously chosen side (+1/-1/0).
+   * @return The resolved target and side, or nullopt if no usable side was found.
    */
-  bool determineBestBypassSide(
-    float path_x, float path_y, float path_yaw,
+  std::optional<BypassResult> determineBestBypassSide(
+    const models::Path & path,
     float robot_x, float robot_y,
-    float free_x, float free_y, float free_perp_x, float free_perp_y,
-    float target_base_x, float target_base_y,
-    float target_perp_x, float target_perp_y,
-    bool check_reachability,
-    float prev_sign,
-    float & signed_offset);
+    size_t obstacle_idx, size_t free_idx, size_t target_idx,
+    float prev_sign);
 
   /**
    * @brief Log a one-line bypass status at DEBUG level, once per transition.
