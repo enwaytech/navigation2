@@ -115,61 +115,6 @@ CostSpeedLimitCritic::score(CriticData& data)
   } else {
     data.costs += (per_traj * weight_).eval();
   }
-
-  /*
-  // version 2: penalize over strided trajectories
-
-  int strided_traj_cols = floor((data.trajectories.x.cols() - 1) / trajectory_point_step_) + 1;
-  int strided_traj_rows = data.trajectories.x.rows();
-  int outer_stride = strided_traj_rows * trajectory_point_step_;
-
-  const auto traj_x = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>(
-      data.trajectories.x.data(), strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
-  const auto traj_y = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>(
-      data.trajectories.y.data(), strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
-  // const auto traj_yaw = Eigen::Map<const Eigen::ArrayXXf, 0,
-  //     Eigen::Stride<-1, -1>>(
-  //   data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
-  //   Eigen::Stride<-1, -1>(outer_stride, 1));
-
-  for (int i = 0; i < strided_traj_rows; ++i)
-  {
-    bool trajectory_collide = false;
-    float pose_cost = 0.0f;
-
-    for (int j = 0; j < strided_traj_cols; j++)
-    {
-      const float pose_cost = costAtPose(traj.x(i, j), traj.y(i, j));
-      if (pose_cost < 1.0f) {
-        continue;  // In free space
-      }
-
-      // TODO check obstacleCritic to see how they do it and what other setup we need
-      const float dist_to_obj = distanceToObstacle(pose_cost);
-      // TODO add inscribed radius or footprint side offset, to be the same as CP.
-      // OR, already add the signed offset to the onset_dist in the params
-      if (dist_to_obj > onset_distance_)
-      {
-        continue;
-      }
-      const auto allowed_speed = min_speed_ + dist_to_obj * (max_speed_ - min_speed_);
-
-      // TODO penalize if state.vx at point is > allowed speed
-      // TODO find a nicer way to do it with Eigen
-
-      if (pose_cost > onset_dis_cost)
-      {
-        // TODO compute allowed speed for the cost
-        // TODO actually cost is not linear, so should reverse engineer the formula in
-        // const auto allowed_speed = min_speed_ +
-        // (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
-
-        // TODO here we penalize speed
-        // TODO should I penalize per point over speed or for the
-      }
-  }
-      */
-
 }
 
 float
@@ -190,9 +135,6 @@ CostSpeedLimitCritic::distanceToObstacle(const float cost)
   const float inscribed_radius = costmap_ros_->getLayeredCostmap()->getInscribedRadius();
   constexpr float constant_log = log(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE - 1);
   float dist_to_obj = inscribed_radius - (log(cost) - constant_log) / scale_factor;
-
-  // TODO divide by resolution?
-  // const double resolution = costmap->getCostmap()->getResolution();
 
   // the distance is computed at base_link cost so
   // substract the inscribed radius to get the closest distance to the object
