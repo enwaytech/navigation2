@@ -50,11 +50,14 @@ void ObstacleBypassCritic::initialize()
         return pub;
       };
     furthest_point_pub_ =
-      make_pose_pub(visualize_furthest_point_, "/critics/ObstacleBypassCritic/furthest_reached_path_point");
+      make_pose_pub(visualize_furthest_point_,
+        "/critics/ObstacleBypassCritic/furthest_reached_path_point");
     occupancy_check_dist_pub_ =
-      make_pose_pub(visualize_occupancy_check_distance_, "/critics/ObstacleBypassCritic/occupancy_check_end_point");
+      make_pose_pub(visualize_occupancy_check_distance_,
+        "/critics/ObstacleBypassCritic/occupancy_check_end_point");
     target_point_pub_ =
-      make_pose_pub(visualize_target_point_, "/critics/ObstacleBypassCritic/target_point");
+      make_pose_pub(visualize_target_point_,
+        "/critics/ObstacleBypassCritic/target_point");
     if (visualize_check_line_) {
       check_line_pub_ = node->create_publisher<visualization_msgs::msg::Marker>(
           "/critics/ObstacleBypassCritic/reachability_check_line", 1);
@@ -217,7 +220,8 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
       unsigned int target_mx, target_my;
       // check target cell is valid
       if (!costmap_->worldToMap(target_x, target_y, target_mx, target_my) ||
-         !isNonLethal(costmap_->getCost(target_mx, target_my))) {
+        !isNonLethal(costmap_->getCost(target_mx, target_my)))
+      {
         return false;
       }
 
@@ -235,14 +239,18 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
       const float end_y = free_y + offset * free_ny;
       unsigned int end_mx, end_my;
       // check line endpoint is valid
-      if (!costmap_->worldToMap(end_x, end_y, end_mx, end_my) || !isNonLethal(costmap_->getCost(end_mx, end_my))) {
+      if (!costmap_->worldToMap(end_x, end_y, end_mx,
+        end_my) || !isNonLethal(costmap_->getCost(end_mx, end_my)))
+      {
         publishCheckLine(robot_x, robot_y, end_x, end_y, true);
         return false;
       }
 
       float line_blocked_x = end_x, line_blocked_y = end_y;
       bool blocked = false;
-      for (nav2_util::LineIterator line(robot_mx, robot_my, end_mx, end_my); line.isValid(); line.advance()) {
+      for (nav2_util::LineIterator line(robot_mx, robot_my, end_mx, end_my); line.isValid();
+        line.advance())
+      {
         if (!isNonLethal(costmap_->getCost(line.getX(), line.getY()))) {
           blocked = true;
           double line_blocked_x_d, line_blocked_y_d;
@@ -283,7 +291,8 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
     const float offset = sign * (first_free * resolution + bypass_offset_dist_);
     if (isSideReachable(offset)) {
       // Forward-looking target point offset from the path in the direction of the bypass
-      return BypassResult{target_base_x + offset * target_nx, target_base_y + offset * target_ny, sign};
+      return BypassResult{target_base_x + offset * target_nx, target_base_y + offset * target_ny,
+        sign};
     }
   }
 

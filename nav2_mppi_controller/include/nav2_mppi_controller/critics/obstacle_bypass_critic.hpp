@@ -52,7 +52,7 @@ protected:
   {
     float target_x;
     float target_y;
-    float sign; // +1 left, -1 right
+    float sign;  // +1 left, -1 right
   };
 
   /**
@@ -105,7 +105,7 @@ protected:
   float min_distance_occupancy_check_{0};
   float max_path_occupancy_ratio_{0};
   float bypass_offset_dist_{0};
-  // Side chosen on the last active cycle (+1 left, -1 right, 0 none). reset when the obstacle is passed.
+  // Last side chosen (+1 left, -1 right, 0 none). reset when the obstacle is passed.
   float last_bypass_sign_{0.0f};
   unsigned int power_{0};
   float weight_{0};

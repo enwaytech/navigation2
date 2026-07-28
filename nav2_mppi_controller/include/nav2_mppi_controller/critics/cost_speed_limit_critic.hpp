@@ -15,6 +15,9 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__COST_SPEED_LIMIT_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__COST_SPEED_LIMIT_CRITIC_HPP_
 
+#include <memory>
+#include <string>
+
 #include "nav2_costmap_2d/inflation_layer.hpp"
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -65,11 +68,10 @@ protected:
   float max_speed_{0};
   float weight_{0};
   unsigned int power_{0};
-  // unsigned int trajectory_point_step_;
   std::string inflation_layer_name_;
 
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *>
-    collision_checker_{nullptr};
+  collision_checker_{nullptr};
   std::shared_ptr<nav2_costmap_2d::InflationLayerInterface> inflation_layer_;
 };
 

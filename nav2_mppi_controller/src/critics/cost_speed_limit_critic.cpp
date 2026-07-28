@@ -27,7 +27,6 @@ CostSpeedLimitCritic::initialize()
   getParam(max_speed_, "max_speed", 2.0f);
   getParam(weight_, "cost_weight", 5.0f);
   getParam(power_, "cost_power", 1);
-  // getParam(trajectory_point_step_, "trajectory_point_step", 2);
   getParam(inflation_layer_name_, "inflation_layer_name", std::string(""));
 
   constexpr float kMinPositive = 1e-3f;
@@ -66,9 +65,9 @@ CostSpeedLimitCritic::initialize()
     costmap_ros_,
     inflation_layer_name_);
 
-  if (inflation_layer_ == nullptr)
-  {
-    RCLCPP_WARN(logger_, "No inflation layer found in costmap configuration. CostSpeedLimitCritic is disabled!");
+  if (inflation_layer_ == nullptr) {
+    RCLCPP_WARN(logger_,
+        "No inflation layer found in costmap configuration. CostSpeedLimitCritic is disabled!");
     return;
   }
 
@@ -81,14 +80,12 @@ CostSpeedLimitCritic::initialize()
 }
 
 void
-CostSpeedLimitCritic::score(CriticData& data)
+CostSpeedLimitCritic::score(CriticData & data)
 {
-  if (!enabled_ || inflation_layer_ == nullptr)
-  {
+  if (!enabled_ || inflation_layer_ == nullptr) {
     return;
   }
 
-  // version 1: only apply at base_link
   const geometry_msgs::msg::Pose & robot_pose = data.state.pose.pose;
   const float rx = static_cast<float>(robot_pose.position.x);
   const float ry = static_cast<float>(robot_pose.position.y);
@@ -99,8 +96,7 @@ CostSpeedLimitCritic::score(CriticData& data)
   }
 
   const float dist_to_obj = distanceToObstacle(pose_cost);
-  if (dist_to_obj > onset_distance_)
-  {
+  if (dist_to_obj > onset_distance_) {
     return;
   }
 
@@ -137,13 +133,13 @@ CostSpeedLimitCritic::distanceToObstacle(const float cost)
   float dist_to_obj = inscribed_radius - (log(cost) - constant_log) / scale_factor;
 
   // the distance is computed at base_link cost so
-  // substract the inscribed radius to get the closest distance to the object
+  // subtract the inscribed radius to get the closest distance to the object
   dist_to_obj -= inscribed_radius;
 
   return dist_to_obj;
 }
 
-} // namespace mppi::critics
+}  // namespace mppi::critics
 
 #include <pluginlib/class_list_macros.hpp>
 PLUGINLIB_EXPORT_CLASS(mppi::critics::CostSpeedLimitCritic, mppi::critics::CriticFunction)
