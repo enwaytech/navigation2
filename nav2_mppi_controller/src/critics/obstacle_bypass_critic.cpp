@@ -74,11 +74,14 @@ void ObstacleBypassCritic::reportStatus(const std::string & status)
   }
 }
 
-void ObstacleBypassCritic::deactivate(const std::string & status)
+void ObstacleBypassCritic::deactivate(const std::string & status, bool clear_side)
 {
   reportStatus(status);
+  clearCheckLine();
   bypass_active_ = false;
-  last_bypass_sign_ = 0.0f;
+  if (clear_side) {
+    last_bypass_sign_ = 0.0f;
+  }
 }
 
 void ObstacleBypassCritic::publishPose(
@@ -116,13 +119,31 @@ void ObstacleBypassCritic::publishCheckLine(
   marker->color.a = 1.0f;
   marker->color.r = blocked ? 1.0f : 0.0f;
   marker->color.g = blocked ? 0.0f : 1.0f;
-  marker->color.b = 0.0f;
+  marker->color.b = blocked ? 0.0f : 1.0f;
   marker->pose.orientation.w = 1.0;
   geometry_msgs::msg::Point start, end;
   start.x = x0; start.y = y0;
   end.x = x1; end.y = y1;
   marker->points.push_back(start);
   marker->points.push_back(end);
+  check_line_pub_->publish(std::move(marker));
+  check_line_shown_ = true;
+}
+
+void ObstacleBypassCritic::clearCheckLine()
+{
+  if (!check_line_shown_) {
+    return;
+  }
+  check_line_shown_ = false;
+  if (!check_line_pub_ || check_line_pub_->get_subscription_count() == 0) {
+    return;
+  }
+  auto marker = std::make_unique<visualization_msgs::msg::Marker>();
+  marker->header.frame_id = costmap_ros_->getGlobalFrameID();
+  marker->header.stamp = clock_->now();
+  marker->ns = "bypass_reachability_check";
+  marker->action = visualization_msgs::msg::Marker::DELETEALL;
   check_line_pub_->publish(std::move(marker));
 }
 
@@ -201,6 +222,7 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
       }
 
       if (!check_reachability) {
+        clearCheckLine();
         return true;
       }
 
@@ -272,7 +294,7 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
 void ObstacleBypassCritic::score(CriticData & data)
 {
   if (!enabled_ || data.state.local_path_length < threshold_to_consider_) {
-    last_bypass_sign_ = 0.0f;
+    deactivate("Disabled");
     return;
   }
 
@@ -390,8 +412,8 @@ void ObstacleBypassCritic::score(CriticData & data)
     if ((world_vx * world_vx + world_vy * world_vy) > speed_deadband_sq &&
       (world_vx * to_tx + world_vy * to_ty) < 0.0f)
     {
-      reportStatus("INACTIVE: moving away from the bypass target");
-      bypass_active_ = false;  // note: keep last_bypass_sign_ to restore the side on resume
+      // keep last_bypass_sign_ to restore the side on resume
+      deactivate("INACTIVE: moving away from the bypass target", false);
       return;
     }
   }

@@ -79,7 +79,7 @@ protected:
   /**
    * @brief Report the status, deactivate the bypass and clear the remembered side.
    */
-  void deactivate(const std::string & status);
+  void deactivate(const std::string & status, bool clear_side = true);
 
   /**
    * @brief Publish a pose.
@@ -93,6 +93,11 @@ protected:
    * (green if clear, red if it hit a lethal cell).
    */
   void publishCheckLine(float x0, float y0, float x1, float y1, bool blocked);
+
+  /**
+   * @brief Delete the reachability check line marker.
+   */
+  void clearCheckLine();
 
   size_t target_offset_from_furthest_{0};
   size_t resume_offset_{0};
@@ -117,6 +122,7 @@ protected:
 
   bool visualize_check_line_{false};
   nav2::Publisher<visualization_msgs::msg::Marker>::SharedPtr check_line_pub_;
+  bool check_line_shown_{false};
 
   std::string last_status_;
 };
