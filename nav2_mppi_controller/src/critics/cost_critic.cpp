@@ -205,10 +205,14 @@ void CostCritic::score(CriticData & data)
     data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
     Eigen::Stride<-1, -1>(outer_stride, 1));
 
+  // Computed once outside the parallel region so the per-instance virtual call doesn't
+  // land in the hot loop; benchmark subclasses override this to flip the direction.
+  const bool iterate_backwards = iterateBackwards();
+
 #ifdef _OPENMP
   #pragma omp parallel for \
   default(none) \
-  shared(repulsive_cost, costmap, near_goal, footprint, \
+  shared(repulsive_cost, costmap, near_goal, footprint, iterate_backwards, \
   strided_traj_rows, strided_traj_cols, traj_x, traj_y, traj_yaw) \
   reduction(&&:all_trajectories_collide) \
   schedule(dynamic) \
@@ -221,7 +225,8 @@ void CostCritic::score(CriticData & data)
 
     // iterate over the trajectory backwards, as collisions are more likely towards the end of
     // the trajectory
-    for (int j = strided_traj_cols - 1; j >= 0; j--) {
+    for (int k = 0; k < strided_traj_cols; k++) {
+      int j = iterate_backwards ? strided_traj_cols - 1 - k : k;
       float Tx = traj_x(i, j);
       float Ty = traj_y(i, j);
       unsigned int x_i = 0u, y_i = 0u;
@@ -255,6 +260,12 @@ void CostCritic::score(CriticData & data)
     }
 
     all_trajectories_collide &= trajectory_collide;
+  }
+
+  // Benchmark shadow instances must not influence real trajectory selection or the
+  // fail_flag short-circuit in CriticManager::evalTrajectoriesScores.
+  if (isBenchmarkOnly()) {
+    return;
   }
 
   if (power_ > 1u) {

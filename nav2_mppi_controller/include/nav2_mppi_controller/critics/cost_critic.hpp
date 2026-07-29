@@ -145,6 +145,22 @@ protected:
     return my * size_x_ + mx;
   }
 
+  /**
+    * @brief Direction to iterate over each trajectory's points when collision checking.
+    *        Overridden by benchmark subclasses to allow apples-to-apples timing comparisons
+    *        against this critic's production (backwards) behavior.
+    * @return true to iterate from the end of the trajectory backwards (production default)
+    */
+  virtual bool iterateBackwards() const {return true;}
+
+  /**
+    * @brief Whether this instance is a shadow/benchmark copy that must not affect real
+    *        behavior: skips contributing to data.costs and skips setting data.fail_flag.
+    *        Overridden by benchmark subclasses.
+    * @return true if this instance's score() result should be discarded
+    */
+  virtual bool isBenchmarkOnly() const {return false;}
+
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *>
   collision_checker_{nullptr};
   float possible_collision_cost_;
