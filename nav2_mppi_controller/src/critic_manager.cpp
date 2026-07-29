@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 
 #include "nav2_mppi_controller/critic_manager.hpp"
 
@@ -103,17 +106,26 @@ void CriticManager::evalTrajectoriesScores(
   // Averaging accumulators (static for debug profiling)
   static size_t eval_count = 0;
   static std::vector<double> critic_time_accum;
+  static std::vector<double> critic_time_sumsq_accum;
+  static std::vector<double> critic_time_min;
+  static std::vector<double> critic_time_max;
+  static std::vector<size_t> critic_spike_count;
   static double eval_total_accum = 0.0;
   constexpr size_t kAvgWindow = 500;
+  // A sample counts as a spike if it exceeds this multiple of the critic's running
+  // mean so far in the current window. Meant to surface OpenMP scheduling stalls
+  // that a plain windowed average would smear away.
+  constexpr double kSpikeMultiplier = 3.0;
 
   if (critic_time_accum.size() != critics_.size()) {
     critic_time_accum.assign(critics_.size(), 0.0);
+    critic_time_sumsq_accum.assign(critics_.size(), 0.0);
+    critic_time_min.assign(critics_.size(), std::numeric_limits<double>::max());
+    critic_time_max.assign(critics_.size(), 0.0);
+    critic_spike_count.assign(critics_.size(), 0);
     eval_count = 0;
     eval_total_accum = 0.0;
   }
-
-  // constexpr double kCriticsThresholdUs = 33000.0;  // 30ms
-  std::vector<double> call_critic_times(critics_.size(), 0.0);
 
   auto eval_start = std::chrono::steady_clock::now();
 
@@ -133,8 +145,20 @@ void CriticManager::evalTrajectoriesScores(
     auto critic_end = std::chrono::steady_clock::now();
     double critic_us =
       std::chrono::duration<double, std::micro>(critic_end - critic_start).count();
+
+    // Compare against the running mean so far this window, before folding this
+    // sample in, so a single bad sample can't hide itself inside its own baseline.
+    if (eval_count > 0) {
+      double running_mean_so_far = critic_time_accum[i] / static_cast<double>(eval_count);
+      if (critic_us > kSpikeMultiplier * running_mean_so_far) {
+        critic_spike_count[i]++;
+      }
+    }
+
     critic_time_accum[i] += critic_us;
-    call_critic_times[i] = critic_us;
+    critic_time_sumsq_accum[i] += critic_us * critic_us;
+    critic_time_min[i] = std::min(critic_time_min[i], critic_us);
+    critic_time_max[i] = std::max(critic_time_max[i], critic_us);
 
     // Calculate cost contribution from this critic
     if (visualize_per_critic_costs_ || publish_critics_stats_) {
@@ -162,23 +186,25 @@ void CriticManager::evalTrajectoriesScores(
   eval_total_accum += eval_this_us;
   eval_count++;
 
-  // // Print if this evaluation exceeded threshold
-  // if (eval_this_us > kCriticsThresholdUs) {
-  //   std::cout << "[SLOW critics] " << eval_this_us / 1000.0 << "ms:";
-  //   for (size_t i = 0; i < critics_.size(); ++i) {
-  //     std::cout << " " << critic_names_[i] << "=" << call_critic_times[i] << "us";
-  //   }
-  //   std::cout << std::endl;
-  // }
-
   if (eval_count >= kAvgWindow) {
     std::cout << "--- Critics avg over " << kAvgWindow << " evals (total="
       << eval_total_accum / kAvgWindow << " us) ---" << std::endl;
     for (size_t i = 0; i < critics_.size(); ++i) {
-      std::cout << "  " << critic_names_[i] << ": "
-        << critic_time_accum[i] / kAvgWindow << " us" << std::endl;
+      double mean = critic_time_accum[i] / kAvgWindow;
+      double variance = critic_time_sumsq_accum[i] / kAvgWindow - mean * mean;
+      double stddev = variance > 0.0 ? std::sqrt(variance) : 0.0;
+      std::cout << "  " << critic_names_[i] << ": avg=" << mean << " us, min="
+        << critic_time_min[i] << " us, max=" << critic_time_max[i]
+        << " us, stddev=" << stddev << " us, spikes(>"
+        << kSpikeMultiplier << "x running mean)=" << critic_spike_count[i]
+        << "/" << kAvgWindow << std::endl;
     }
     std::fill(critic_time_accum.begin(), critic_time_accum.end(), 0.0);
+    std::fill(critic_time_sumsq_accum.begin(), critic_time_sumsq_accum.end(), 0.0);
+    std::fill(critic_time_min.begin(), critic_time_min.end(),
+      std::numeric_limits<double>::max());
+    std::fill(critic_time_max.begin(), critic_time_max.end(), 0.0);
+    std::fill(critic_spike_count.begin(), critic_spike_count.end(), 0);
     eval_total_accum = 0.0;
     eval_count = 0;
   }
