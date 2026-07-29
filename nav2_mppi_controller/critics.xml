@@ -9,6 +9,14 @@
       <description>mppi critic for obstacle avoidance using costmap score</description>
     </class>
 
+    <class type="mppi::critics::CostCriticBenchmarkBackward" base_class_type="mppi::critics::CriticFunction">
+      <description>[TEMP] CostCritic shadow copy iterating backwards, for timing comparison only</description>
+    </class>
+
+    <class type="mppi::critics::CostCriticBenchmarkForward" base_class_type="mppi::critics::CriticFunction">
+      <description>[TEMP] CostCritic shadow copy iterating forwards, for timing comparison only</description>
+    </class>
+
     <class type="mppi::critics::GoalCritic" base_class_type="mppi::critics::CriticFunction">
       <description>mppi critic for driving towards the goal</description>
     </class>
