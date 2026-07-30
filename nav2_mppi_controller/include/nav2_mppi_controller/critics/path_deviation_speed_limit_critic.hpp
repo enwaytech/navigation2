@@ -43,7 +43,7 @@ public:
   void score(CriticData & data) override;
 
 protected:
-  float min_speed_{0};
+  float max_speed_{0};
   float min_deviation_{0};
   float weight_{0};
   unsigned int power_{0};

@@ -28,7 +28,8 @@ namespace mppi::critics
 
 /**
  * @class mppi::critics::CostSpeedLimitCritic
- * @brief Critic objective function for limiting linear speed based on costmap's inflated cost
+ * @brief Critic objective function for limiting linear speed based on the costmap's inflated cost
+ * at the robot's base_link
  */
 class CostSpeedLimitCritic : public CriticFunction
 {
@@ -39,7 +40,7 @@ public:
   void initialize() override;
 
   /**
-   * @brief Penalize fast driving when near obstacles
+   * @brief Penalize fast driving when near obstacles, based on the costmap's cost at base_link
    *
    * @param data CriticData with the sampled trajectory states; per-trajectory
    *             cost is accumulated into data.costs.

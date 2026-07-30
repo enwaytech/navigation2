@@ -21,7 +21,7 @@ void PathDeviationSpeedLimitCritic::initialize()
 {
   auto getParam = parameters_handler_->getParamGetter(name_);
 
-  getParam(min_speed_, "min_speed", 0.6f);
+  getParam(max_speed_, "max_speed", 0.6f);
   getParam(min_deviation_, "min_deviation", 0.5f);
   getParam(weight_, "cost_weight", 5.0f);
   getParam(power_, "cost_power", 1);
@@ -39,7 +39,7 @@ void PathDeviationSpeedLimitCritic::initialize()
     logger_,
     "PathDeviationSpeedLimitCritic instantiated with"
       " min_deviation=" << min_deviation_ <<
-      ", min_speed=" << min_speed_ <<
+      ", max_speed=" << max_speed_ <<
       ", weight=" << weight_);
 }
 
@@ -83,7 +83,7 @@ void PathDeviationSpeedLimitCritic::score(CriticData & data)
     return;
   }
 
-  const auto violation = (data.state.vx.abs() - min_speed_).max(0.0f);
+  const auto violation = (data.state.vx.abs() - max_speed_).max(0.0f);
   const auto per_traj = (violation * data.model_dt).rowwise().sum().eval();
 
   if (power_ > 1u) {
