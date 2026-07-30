@@ -177,6 +177,7 @@ controller_server:
           "GoalCritic",
           "GoalAngleCritic",
           "PathAlignCritic",
+          "ObstacleBypassCritic",
           "PathFollowCritic",
           "PathAngleCritic",
           "PreferForwardCritic",
@@ -219,6 +220,16 @@ controller_server:
         threshold_to_consider: 0.5
         offset_from_furthest: 20
         use_path_orientations: false
+      ObstacleBypassCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.667
+        bypass_offset_dist: 1.0
+        max_path_occupancy_ratio: 0.05
+        min_distance_occupancy_check: 4.5
+        threshold_to_consider: 0.5
+        target_offset_from_furthest: 20
+        resume_offset: 15
       PathFollowCritic:
         enabled: true
         cost_power: 1

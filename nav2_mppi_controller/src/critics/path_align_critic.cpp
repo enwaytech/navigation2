@@ -23,7 +23,7 @@ void PathAlignCritic::initialize()
   auto getParam = parameters_handler_->getParamGetter(name_);
   getParam(power_, "cost_power", 1);
   getParam(weight_, "cost_weight", 10.0f);
-  getParam(occupancy_check_min_distance_, "occupancy_check_min_distance", 2.0f);
+  getParam(min_distance_occupancy_check_, "min_distance_occupancy_check", 2.0f);
   getParam(max_path_occupancy_ratio_, "max_path_occupancy_ratio", 0.07f);
   getParam(offset_from_furthest_, "offset_from_furthest", 20);
   getParam(trajectory_point_step_, "trajectory_point_step", 4);
@@ -65,43 +65,35 @@ void PathAlignCritic::score(CriticData & data)
     return;
   }
 
-  // Only apply critic when trajectories reach far enough along the way path.
-  // This ensures that path alignment is only considered when actually tracking the path
-  // (e.g. not driving very slow or when first getting bearing w.r.t. the path)
+  // Don't apply when first getting bearing w.r.t. the path
   utils::setPathFurthestPointIfNotSet(data);
+  const size_t furthest_reached_path_point = *data.furthest_reached_path_point;
 
   const auto now = clock_->now();
   // Visualize furthest reached pose if enabled
-  if (visualize_furthest_point_ && *data.furthest_reached_path_point > 0 &&
+  if (visualize_furthest_point_ && furthest_reached_path_point > 0 &&
     furthest_point_pub_->get_subscription_count() > 0)
   {
     auto furthest_point = std::make_unique<geometry_msgs::msg::PoseStamped>();
     furthest_point->header.frame_id = costmap_ros_->getGlobalFrameID();
     furthest_point->header.stamp = now;
-    furthest_point->pose.position.x = data.path.x(*data.furthest_reached_path_point);
-    furthest_point->pose.position.y = data.path.y(*data.furthest_reached_path_point);
+    furthest_point->pose.position.x = data.path.x(furthest_reached_path_point);
+    furthest_point->pose.position.y = data.path.y(furthest_reached_path_point);
     furthest_point->pose.position.z = 0.0;
     tf2::Quaternion quat;
-    quat.setRPY(0.0, 0.0, data.path.yaws(*data.furthest_reached_path_point));
+    quat.setRPY(0.0, 0.0, data.path.yaws(furthest_reached_path_point));
     furthest_point->pose.orientation = tf2::toMsg(quat);
     furthest_point_pub_->publish(std::move(furthest_point));
   }
 
-  if (*data.furthest_reached_path_point < offset_from_furthest_) {
+  if (furthest_reached_path_point < offset_from_furthest_) {
     return;
   }
 
-  const size_t batch_size = data.trajectories.x.rows();
-  Eigen::ArrayXf cost(data.costs.rows());
-  cost.setZero();
-
-  // Find integrated arc-length distance along the path = total dist traveled along the path to each
-  // path point
-  // loop until end of path, to guarantee don't truncate long trajectories when
-  // furthest_reached_path_point is small (e.g. when all trajectories curve away from the path)
+  // Find integrated distance in the path and find the first path IDX further than
+  //  max(min_distance_occupancy_check_, furthest_reached_path_point)
   const size_t path_segments_count = data.path.x.size() - 1;
-  // initialize the occupancy check id to max, in case the entire path is within the distance
-  size_t occupancy_check_distance_idx = path_segments_count;
+  size_t occupancy_check_distance_idx = 0;
   std::vector<float> path_integrated_distances(path_segments_count, 0.0f);
   std::vector<utils::Pose2D> path(path_segments_count);
   float dx = 0.0f, dy = 0.0f;
@@ -115,13 +107,10 @@ void PathAlignCritic::score(CriticData & data)
     dy = data.path.y(i) - pose.y;
     path_integrated_distances[i] = path_integrated_distances[i - 1] + sqrtf(dx * dx + dy * dy);
 
-    // find the first path point that is further than
-    //  max(occupancy_check_min_distance_, furthest_reached_path_point)
-    if (occupancy_check_distance_idx == path_segments_count &&
-      path_integrated_distances[i] > occupancy_check_min_distance_ &&
-      i >= *data.furthest_reached_path_point)
+    if (path_integrated_distances[i] <= min_distance_occupancy_check_ ||
+      i < furthest_reached_path_point)
     {
-      occupancy_check_distance_idx = i;
+      occupancy_check_distance_idx = (i + 1 < path_segments_count) ? i + 1 : i;
     }
   }
 
@@ -141,8 +130,7 @@ void PathAlignCritic::score(CriticData & data)
     occupancy_check_dist_pub_->publish(std::move(occupancy_check_point));
   }
 
-  // Don't apply when dynamic obstacles are blocking significant proportions of the path
-  // up to occupancy_check_min_distance_
+  // Don't apply when dynamic obstacles are blocking significant proportions of the local path
   const float occupancy_check_distance_idx_flt = static_cast<float>(occupancy_check_distance_idx);
   utils::setPathCostsIfNotSet(data, costmap_ros_);
   std::vector<bool> & path_pts_valid = *data.path_pts_valid;
@@ -152,6 +140,7 @@ void PathAlignCritic::score(CriticData & data)
     if (invalid_ctr / occupancy_check_distance_idx_flt > max_path_occupancy_ratio_ &&
       invalid_ctr > 2.0f)
     {
+      // Path is blocked, defer to ObstacleBypassCritic if desired to go around dynamically
       return;
     }
   }
@@ -185,6 +174,10 @@ void PathAlignCritic::score(CriticData & data)
     Eigen::Stride<-1, -1>(outer_stride, 1));
   const auto traj_sampled_size = T_x.cols();
 
+  const size_t batch_size = data.trajectories.x.rows();
+  Eigen::ArrayXf cost(data.costs.rows());
+  cost.setZero();
+
   for (size_t t = 0; t < batch_size; ++t) {
     summed_path_dist = 0.0f;
     num_samples = 0u;
@@ -192,7 +185,7 @@ void PathAlignCritic::score(CriticData & data)
     path_pt = 0u;
     float Tx_m1 = T_x(t, 0);
     float Ty_m1 = T_y(t, 0);
-    // At each (strided) traj point, find the path point whose integrated arc-length distance along
+    // At each (strided) traj point, find the path point whose integrated distance along
     // the path is closest to the trajectory point's integrated distance along the trajectory.
     // if that path point is not in collision, compute the Euclidean distance between the matching
     // path pt & traj pt the total cost is the average of those distances across the trajectory

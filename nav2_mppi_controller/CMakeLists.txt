@@ -84,12 +84,15 @@ add_library(mppi_critics SHARED
   src/critics/angular_velocity_speed_limit_critic.cpp
   src/critics/constraint_critic.cpp
   src/critics/cost_critic.cpp
+  src/critics/cost_speed_limit_critic.cpp
   src/critics/direction_change_critic.cpp
   src/critics/goal_critic.cpp
   src/critics/goal_angle_critic.cpp
+  src/critics/obstacle_bypass_critic.cpp
   src/critics/obstacles_critic.cpp
   src/critics/path_align_critic.cpp
   src/critics/path_angle_critic.cpp
+  src/critics/path_deviation_speed_limit_critic.cpp
   src/critics/path_follow_critic.cpp
   src/critics/prefer_forward_critic.cpp
   src/critics/twirling_critic.cpp
