@@ -52,7 +52,7 @@ protected:
   {
     float target_x;
     float target_y;
-    float sign;  // +1 left, -1 right
+    int sign;  // +1 left, -1 right
   };
 
   /**
@@ -69,7 +69,7 @@ protected:
     const models::Path & path,
     float robot_x, float robot_y,
     size_t obstacle_idx, size_t free_idx, size_t target_idx,
-    float prev_sign);
+    int prev_sign);
 
   /**
    * @brief Log a one-line bypass status at DEBUG level, once per transition.
@@ -106,7 +106,7 @@ protected:
   float max_path_occupancy_ratio_{0};
   float bypass_offset_dist_{0};
   // Last side chosen (+1 left, -1 right, 0 none). reset when the obstacle is passed.
-  float last_bypass_sign_{0.0f};
+  int last_bypass_sign_{0};
   unsigned int power_{0};
   float weight_{0};
   bool bypass_active_{false};

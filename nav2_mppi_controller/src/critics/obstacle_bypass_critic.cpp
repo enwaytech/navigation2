@@ -152,7 +152,7 @@ void ObstacleBypassCritic::clearCheckLine()
 
 std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeBypassTarget(
   const models::Path & path, float robot_x, float robot_y,
-  size_t obstacle_idx, size_t last_free_idx, size_t target_idx, float prev_sign)
+  size_t obstacle_idx, size_t last_free_idx, size_t target_idx, int prev_sign)
 {
   const float resolution = static_cast<float>(costmap_->getResolution());
   const bool tracking_unknown = costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
@@ -273,18 +273,18 @@ std::optional<ObstacleBypassCritic::BypassResult> ObstacleBypassCritic::computeB
 
   // Side hysteresis: keep the previous side while it still has free space, otherwise take the
   // side whose free space is closer (ties to left). Signed offset: + left, - right.
-  float sign;
-  if (prev_sign > 0.0f && first_free_left <= max_steps) {
-    sign = 1.0f;
-  } else if (prev_sign < 0.0f && first_free_right <= max_steps) {
-    sign = -1.0f;
+  int sign;
+  if (prev_sign > 0 && first_free_left <= max_steps) {
+    sign = 1;
+  } else if (prev_sign < 0 && first_free_right <= max_steps) {
+    sign = -1;
   } else {
-    sign = (first_free_left <= first_free_right) ? 1.0f : -1.0f;
+    sign = (first_free_left <= first_free_right) ? 1 : -1;
   }
 
   // Try the chosen side, then the other one.
   for (int attempt = 0; attempt < 2; ++attempt, sign = -sign) {
-    const int first_free = (sign > 0.0f) ? first_free_left : first_free_right;
+    const int first_free = (sign > 0) ? first_free_left : first_free_right;
     if (first_free > max_steps) {
       continue;
     }
