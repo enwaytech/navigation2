@@ -284,8 +284,15 @@ void DockingServer::dockRobot()
       try {
         // Perform a 180º to face away from the dock if needed
         if (dock->plugin->shouldRotateToDock()) {
-          rotateToDock(dock_pose);
+          RCLCPP_INFO(get_logger(), "Starting rotateToDock");
+          if(!rotateToDock(dock_pose)) {
+            stop_docking(false);
+            docking_action_server_->terminate_all(result);
+            RCLCPP_INFO(get_logger(), "Canceled or preempted while rotating to dock");
+            return;
+          }
         }
+
         // Approach the dock using control law
         if (approachDock(dock, dock_pose, dock_backward)) {
           // We are docked, wait for charging to begin
@@ -432,7 +439,7 @@ bool DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseSta
   return false;
 }
 
-void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose)
+bool DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose)
 {
   const double dt = 1.0 / params_->controller_frequency;
   auto target_pose = dock_pose;
@@ -444,11 +451,18 @@ void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_po
   auto timeout = rclcpp::Duration::from_seconds(params_->rotate_to_dock_timeout);
 
   while (rclcpp::ok()) {
+    if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
+      checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
+    {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while rotateToDock");
+      return false;
+    }
+
     auto robot_pose = getRobotPoseInFrame(dock_pose.header.frame_id);
     auto angular_distance_to_heading = angles::shortest_angular_distance(
       tf2::getYaw(robot_pose.pose.orientation), tf2::getYaw(target_pose.pose.orientation));
     if (fabs(angular_distance_to_heading) < params_->rotation_angular_tolerance) {
-      break;
+      return true;
     }
 
     auto current_vel = std::make_unique<geometry_msgs::msg::TwistStamped>();
@@ -467,6 +481,7 @@ void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_po
 
     loop_rate.sleep();
   }
+  return false;
 }
 
 bool DockingServer::approachDock(

@@ -101,8 +101,9 @@ public:
   /**
    * @brief Perform a pure rotation to dock orientation.
    * @param dock_pose The target pose that will be used to rotate.
+   * @returns True if rotated successfully, False if cancelled or timedout.
    */
-  void rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose);
+  bool rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose);
 
   /**
    * @brief Wait for charging to begin.
