@@ -688,7 +688,6 @@ void DockingServer::undockRobot()
   }
 
   getPreemptedGoalIfRequested<UndockRobot>(goal, undocking_action_server_);
-  auto max_duration = rclcpp::Duration::from_seconds(goal->max_undocking_time);
 
   try {
     // Get dock plugin information from request or docked state, reset state.
@@ -770,7 +769,13 @@ void DockingServer::undockRobot()
       {
         // Perform a 180º to the original staging pose
         if (dock->shouldRotateToDock()) {
-          rotateToDock(staging_pose);
+          if(!rotateToDock(staging_pose)) {
+            publishZeroVelocity();
+            undocking_action_server_->terminate_all(result);
+            RCLCPP_INFO(get_logger(), "Canceled or preempted while rotating to dock");
+            return;
+          }
+
         }
 
         // Have reached staging_pose
