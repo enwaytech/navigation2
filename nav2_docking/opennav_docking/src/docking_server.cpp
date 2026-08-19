@@ -195,6 +195,16 @@ void DockingServer::dockRobot()
   Dock * dock{nullptr};
   num_retries_ = 0;
 
+  auto stop_docking = [this, &dock, &goal](bool successful) {
+    publishZeroVelocity();
+    if (dock) {
+      RCLCPP_INFO(get_logger(), "Stopping detection process");
+      dock->plugin->stopDetectionProcess();
+    }
+    // Store dock state for later undocking and delete temp dock, if applicable
+    stashDockData(goal->use_dock_id, dock, successful);
+  };
+
   try {
     // Get dock (instance and plugin information) from request
     if (goal->use_dock_id) {
@@ -284,18 +294,14 @@ void DockingServer::dockRobot()
             }
             result->success = true;
             result->num_retries = num_retries_;
-            publishZeroVelocity();
-            dock->plugin->stopDetectionProcess();
-            stashDockData(goal->use_dock_id, dock, true);
+            stop_docking(true);
             docking_action_server_->succeeded_current(result);
             return;
           }
         }
 
         // Cancelled, preempted, or shutting down (recoverable errors throw DockingException)
-        publishZeroVelocity();
-        dock->plugin->stopDetectionProcess();
-        stashDockData(goal->use_dock_id, dock, false);
+        stop_docking(false);
         docking_action_server_->terminate_all(result);
         return;
       } catch (opennav_docking_core::DockingException & e) {
@@ -309,9 +315,7 @@ void DockingServer::dockRobot()
       // Reset to staging pose to try again
       if (!resetApproach(staging_pose, dock_backward)) {
         // Cancelled, preempted, or shutting down
-        publishZeroVelocity();
-        dock->plugin->stopDetectionProcess();
-        stashDockData(goal->use_dock_id, dock, false);
+        stop_docking(false);
         docking_action_server_->terminate_all(result);
         return;
       }
@@ -356,12 +360,7 @@ void DockingServer::dockRobot()
   }
 
   result->num_retries = num_retries_;
-  publishZeroVelocity();
-  if (dock) {
-    dock->plugin->stopDetectionProcess();
-  }
-  // Store dock state for later undocking and delete temp dock, if applicable
-  stashDockData(goal->use_dock_id, dock, false);
+  stop_docking(false);
   docking_action_server_->terminate_current(result);
 }
 
