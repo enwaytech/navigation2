@@ -348,11 +348,10 @@ bool SimpleChargingDock::startDetectionProcess()
   // 1. Service START request
   if (detector_client_) {
     auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+    const auto timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(detector_service_timeout_));
     try {
-      auto future = detector_client_->invoke(
-        req,
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::duration<double>(detector_service_timeout_)));
+      auto future = detector_client_->invoke(req, timeout, timeout);
 
       if (!future || !future->success) {
         RCLCPP_ERROR(
@@ -395,11 +394,10 @@ bool SimpleChargingDock::stopDetectionProcess()
   // 1. Service STOP request
   if (detector_client_) {
     auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+    const auto timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(detector_service_timeout_));
     try {
-      auto future = detector_client_->invoke(
-        req,
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::duration<double>(detector_service_timeout_)));
+      auto future = detector_client_->invoke(req, timeout, timeout);
 
       if (!future || !future->success) {
         RCLCPP_ERROR(
