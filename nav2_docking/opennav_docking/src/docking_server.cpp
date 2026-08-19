@@ -256,7 +256,13 @@ void DockingServer::dockRobot()
     tf2_buffer_->transform(dock_pose, dock_pose, params_->fixed_frame);
 
     // Get initial detection of dock before proceeding to move
-    doInitialPerception(dock, dock_pose);
+    if (!doInitialPerception(dock, dock_pose))
+    {
+      // Cancelled, preempted, or shutting down
+      stop_docking(false);
+      docking_action_server_->terminate_all(result);
+      return;
+    }
     RCLCPP_INFO(get_logger(), "Successful initial dock detection");
 
     // Get the direction of the movement
@@ -392,10 +398,11 @@ Dock * DockingServer::generateGoalDock(std::shared_ptr<const DockRobot::Goal> go
   return dock;
 }
 
-void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose)
+bool DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose)
 {
   publishDockingFeedback(DockRobot::Feedback::INITIAL_PERCEPTION);
 
+  RCLCPP_INFO(get_logger(), "Starting detection process");
   if (!dock->plugin->startDetectionProcess()) {
     throw opennav_docking_core::FailedToDetectDock("Failed to start the detection process.");
   }
@@ -403,7 +410,11 @@ void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseSta
   rclcpp::Rate loop_rate(params_->controller_frequency);
   auto start = this->now();
   auto timeout = rclcpp::Duration::from_seconds(params_->initial_perception_timeout);
-  while (!dock->plugin->getRefinedPose(dock_pose, dock->id)) {
+  while (rclcpp::ok()) {
+    if (dock->plugin->getRefinedPose(dock_pose, dock->id)) {
+      return true;
+    }
+
     if (this->now() - start > timeout) {
       throw opennav_docking_core::FailedToDetectDock(
               "Failed initial dock detection: Timeout exceeded");
@@ -412,11 +423,13 @@ void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseSta
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
-      return;
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while waiting for initial detection");
+      return false;
     }
 
     loop_rate.sleep();
   }
+  return false;
 }
 
 void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose)
