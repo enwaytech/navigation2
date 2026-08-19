@@ -279,8 +279,18 @@ void DockingServer::dockRobot()
     }
 
     // Docking control loop: while not docked, run controller
+    RCLCPP_INFO(get_logger(), "Starting docking control loop");
     rclcpp::Time dock_contact_time;
     while (rclcpp::ok()) {
+      if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
+        checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
+        {
+          stop_docking(false);
+          docking_action_server_->terminate_all(result);
+          RCLCPP_INFO(get_logger(), "Canceled or preempted while docking");
+          return;
+        }
+
       try {
         // Perform a 180º to face away from the dock if needed
         if (dock->plugin->shouldRotateToDock()) {
@@ -294,6 +304,7 @@ void DockingServer::dockRobot()
         }
 
         // Approach the dock using control law
+        RCLCPP_INFO(get_logger(), "Starting approachDock");
         if (approachDock(dock, dock_pose, dock_backward)) {
           // We are docked, wait for charging to begin
           RCLCPP_INFO(
@@ -325,7 +336,8 @@ void DockingServer::dockRobot()
         RCLCPP_WARN(get_logger(), "Docking failed, will retry: %s", e.what());
       }
 
-      // Reset to staging pose to try again
+      // Reset to staging pose to try again (Docking did not return (success or non-recoverable))
+      RCLCPP_INFO(get_logger(), "Starting resetApproach");
       if (!resetApproach(staging_pose, dock_backward)) {
         // Cancelled, preempted, or shutting down
         stop_docking(false);
@@ -503,6 +515,7 @@ bool DockingServer::approachDock(
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while approachDock");
       return false;
     }
 
@@ -570,6 +583,7 @@ bool DockingServer::waitForCharge(Dock * dock)
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while waitForCharge");
       return false;
     }
 
@@ -595,6 +609,7 @@ bool DockingServer::resetApproach(
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while resetApproach");
       return false;
     }
 
