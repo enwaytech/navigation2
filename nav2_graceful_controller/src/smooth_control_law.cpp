@@ -82,6 +82,9 @@ geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   // And linear velocity to follow the curvature
   v = (curvature != 0.0) ? (w_bound / curvature) : v;
 
+  // Reapply velocity limits
+  v = std::copysign(std::clamp(std::fabs(v), v_linear_min_, v_linear_max_), v);
+
   // Return the velocity command
   geometry_msgs::msg::Twist cmd_vel;
   cmd_vel.linear.x = v;
