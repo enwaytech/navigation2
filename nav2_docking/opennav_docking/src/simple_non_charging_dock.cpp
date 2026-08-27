@@ -299,7 +299,7 @@ void SimpleNonChargingDock::jointStateCallback(
 bool SimpleNonChargingDock::startDetectionProcess()
 {
   // Skip if already active
-  if (detection_active_) {
+  if (detection_active_ || !use_external_detection_pose_) {
     return true;
   }
 
