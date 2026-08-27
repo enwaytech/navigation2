@@ -524,6 +524,19 @@ bool DockingServer::approachDock(
       throw opennav_docking_core::FailedToDetectDock("Failed dock detection");
     }
 
+    // Detect overshoot: the target should stay behind the robot's own forward axis while
+    // approaching backward (ahead of it while approaching forward). If the robot has passed it,
+    // the controller will behave badly
+    geometry_msgs::msg::PoseStamped dock_pose_in_base_frame = dock_pose;
+    dock_pose_in_base_frame.header.stamp = rclcpp::Time(0);
+    tf2_buffer_->transform(dock_pose_in_base_frame, dock_pose_in_base_frame, params_->base_frame);
+    const bool overshot = backward ?
+      (dock_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
+      (dock_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
+    if (overshot) {
+      throw opennav_docking_core::FailedToControl("Overshot the dock pose while approaching");
+    }
+
     // Transform target_pose into base_link frame
     geometry_msgs::msg::PoseStamped target_pose = dock_pose;
     target_pose.header.stamp = rclcpp::Time(0);
