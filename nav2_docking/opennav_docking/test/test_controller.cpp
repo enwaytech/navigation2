@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
+
 #include "gtest/gtest.h"
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -229,6 +231,7 @@ TEST(ControllerTests, DynamicParameters) {
       rclcpp::Parameter("controller.v_linear_max", 6.0),
       rclcpp::Parameter("controller.v_angular_max", 7.0),
       rclcpp::Parameter("controller.slowdown_radius", 8.0),
+      rclcpp::Parameter("controller.angular_slowdown_radius", 8.5),
       rclcpp::Parameter("controller.projection_time", 9.0),
       rclcpp::Parameter("controller.simulation_time_step", 10.0),
       rclcpp::Parameter("controller.dock_collision_threshold", 11.0),
@@ -247,6 +250,7 @@ TEST(ControllerTests, DynamicParameters) {
   EXPECT_EQ(node->get_parameter("controller.v_linear_max").as_double(), 6.0);
   EXPECT_EQ(node->get_parameter("controller.v_angular_max").as_double(), 7.0);
   EXPECT_EQ(node->get_parameter("controller.slowdown_radius").as_double(), 8.0);
+  EXPECT_EQ(node->get_parameter("controller.angular_slowdown_radius").as_double(), 8.5);
   EXPECT_EQ(node->get_parameter("controller.projection_time").as_double(), 9.0);
   EXPECT_EQ(node->get_parameter("controller.simulation_time_step").as_double(), 10.0);
   EXPECT_EQ(node->get_parameter("controller.dock_collision_threshold").as_double(), 11.0);

@@ -43,10 +43,13 @@ public:
    * @param v_linear_min Minimum linear velocity.
    * @param v_linear_max Maximum linear velocity.
    * @param v_angular_max Maximum angular velocity.
+   * @param angular_slowdown_radius Radial threshold applied to the angular slowdown rule.
+   *                                Default: 0.0 - disabled
    */
   SmoothControlLaw(
     double k_phi, double k_delta, double beta, double lambda, double slowdown_radius,
-    double v_linear_min, double v_linear_max, double v_angular_max);
+    double v_linear_min, double v_linear_max, double v_angular_max,
+    double angular_slowdown_radius = 0.0);
 
   /**
    * @brief Destructor for nav2_graceful_controller::SmoothControlLaw
@@ -80,6 +83,14 @@ public:
    */
   void setSpeedLimit(
     const double v_linear_min, const double v_linear_max, const double v_angular_max);
+
+  /**
+   * @brief Set the angular slowdown radius
+   *
+   * @param angular_slowdown_radius Radius below which the angular velocity limit is reduced.
+   *   Zero or negative disables the slowdown.
+   */
+  void setAngularSlowdownRadius(const double angular_slowdown_radius);
 
   /**
    * @brief Compute linear and angular velocities command using the curvature.
@@ -184,6 +195,11 @@ protected:
    * @brief Maximum angular velocity.
    */
   double v_angular_max_;
+
+  /**
+   * @brief Radial threshold below which the angular velocity limit is reduced
+   */
+  double angular_slowdown_radius_{0.0};
 };
 
 }  // namespace nav2_graceful_controller

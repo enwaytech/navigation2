@@ -22,9 +22,11 @@ namespace nav2_graceful_controller
 
 SmoothControlLaw::SmoothControlLaw(
   double k_phi, double k_delta, double beta, double lambda, double slowdown_radius,
-  double v_linear_min, double v_linear_max, double v_angular_max)
+  double v_linear_min, double v_linear_max, double v_angular_max,
+  double angular_slowdown_radius)
 : k_phi_(k_phi), k_delta_(k_delta), beta_(beta), lambda_(lambda), slowdown_radius_(slowdown_radius),
-  v_linear_min_(v_linear_min), v_linear_max_(v_linear_max), v_angular_max_(v_angular_max)
+  v_linear_min_(v_linear_min), v_linear_max_(v_linear_max), v_angular_max_(v_angular_max),
+  angular_slowdown_radius_(angular_slowdown_radius)
 {
 }
 
@@ -50,6 +52,11 @@ void SmoothControlLaw::setSpeedLimit(
   v_angular_max_ = v_angular_max;
 }
 
+void SmoothControlLaw::setAngularSlowdownRadius(const double angular_slowdown_radius)
+{
+  angular_slowdown_radius_ = angular_slowdown_radius;
+}
+
 geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   const geometry_msgs::msg::Pose & target, const geometry_msgs::msg::Pose & current,
   const bool & backward)
@@ -65,20 +72,26 @@ geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   // slowdown the controller as it approaches its target
   double v = v_linear_max_ / (1.0 + beta_ * std::pow(fabs(curvature), lambda_));
 
-  // Slowdown when the robot is near the target to remove singularity
-  v = std::min(v_linear_max_ * (ego_coords.r / slowdown_radius_), v);
-
   // Set some small v_min when far away from origin to promote faster
   // turning motion when the curvature is very high
   v = std::clamp(v, v_linear_min_, v_linear_max_);
 
+  // Slowdown when the robot is near the target to remove singularity
+  v = std::min(v_linear_max_ * (ego_coords.r / slowdown_radius_), v);
+
   // Set the velocity to negative if the robot is moving backwards
   v = backward ? -v : v;
+
+  // Slowdown the angular velocity near the target
+  double v_angular_limit = v_angular_max_;
+  if (angular_slowdown_radius_ > 0.0) {
+    v_angular_limit = v_angular_max_ * std::min(1.0, ego_coords.r / angular_slowdown_radius_);
+  }
 
   // Compute the angular velocity
   double w = curvature * v;
   // Bound angular velocity between [-max_angular_vel, max_angular_vel]
-  double w_bound = std::clamp(w, -v_angular_max_, v_angular_max_);
+  double w_bound = std::clamp(w, -v_angular_limit, v_angular_limit);
   // And linear velocity to follow the curvature
   v = (curvature != 0.0) ? (w_bound / curvature) : v;
 

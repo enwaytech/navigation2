@@ -43,6 +43,8 @@ Controller::Controller(
   v_linear_max_ = node->declare_or_get_parameter("controller.v_linear_max", 0.25);
   v_angular_max_ = node->declare_or_get_parameter("controller.v_angular_max", 0.75);
   slowdown_radius_ = node->declare_or_get_parameter("controller.slowdown_radius", 0.25);
+  angular_slowdown_radius_ = node->declare_or_get_parameter(
+    "controller.angular_slowdown_radius", 0.0);
   rotate_to_heading_angular_vel_ = node->declare_or_get_parameter(
     "controller.rotate_to_heading_angular_vel", 1.0);
   rotate_to_heading_max_angular_accel_ = node->declare_or_get_parameter(
@@ -64,7 +66,7 @@ Controller::Controller(
 
   control_law_ = std::make_unique<nav2_graceful_controller::SmoothControlLaw>(
     k_phi_, k_delta_, beta_, lambda_, slowdown_radius_, v_linear_min_, v_linear_max_,
-    v_angular_max_);
+    v_angular_max_, angular_slowdown_radius_);
 
   // Add callback for dynamic parameters
   post_set_params_handler_ = node->add_post_set_parameters_callback(
@@ -263,6 +265,8 @@ Controller::updateParametersCallback(const std::vector<rclcpp::Parameter> & para
         v_angular_max_ = parameter.as_double();
       } else if (param_name == "controller.slowdown_radius") {
         slowdown_radius_ = parameter.as_double();
+      } else if (param_name == "controller.angular_slowdown_radius") {
+        angular_slowdown_radius_ = parameter.as_double();
       } else if (param_name == "controller.rotate_to_heading_angular_vel") {
         rotate_to_heading_angular_vel_ = parameter.as_double();
       } else if (param_name == "controller.rotate_to_heading_max_angular_accel") {
@@ -279,6 +283,7 @@ Controller::updateParametersCallback(const std::vector<rclcpp::Parameter> & para
       control_law_->setCurvatureConstants(k_phi_, k_delta_, beta_, lambda_);
       control_law_->setSlowdownRadius(slowdown_radius_);
       control_law_->setSpeedLimit(v_linear_min_, v_linear_max_, v_angular_max_);
+      control_law_->setAngularSlowdownRadius(angular_slowdown_radius_);
     }
   }
 }
