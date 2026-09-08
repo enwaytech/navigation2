@@ -179,6 +179,48 @@ TEST(SmoothControlLawTest, calculateRegularVelocity) {
   EXPECT_NEAR(cmd_vel.angular.z, -0.4022844, 0.0001);
 }
 
+TEST(SmoothControlLawTest, angularStopRadius) {
+  // Angular limit ramps from v_angular_max (0.15) at the slowdown radius (2.5) to zero at the
+  // stop radius (1.25)
+  nav2_graceful_controller::SmoothControlLaw scl(
+    3.0, 2.0, 0.4, 2.0, 1.0, 0.05, 0.15, 0.15, 2.5, 1.25);
+
+  // Target inside the stop radius and off-axis: no steering, drive straight at minimum speed
+  geometry_msgs::msg::Pose target;
+  target.position.x = 0.8;
+  target.position.y = 0.3;
+  auto cmd_vel = scl.calculateRegularVelocity(target);
+  EXPECT_DOUBLE_EQ(cmd_vel.angular.z, 0.0);
+  EXPECT_DOUBLE_EQ(cmd_vel.linear.x, 0.05);
+
+  // Same while driving backwards: the direction of motion must be kept
+  target.position.x = -0.8;
+  cmd_vel = scl.calculateRegularVelocity(target, true);
+  EXPECT_DOUBLE_EQ(cmd_vel.angular.z, 0.0);
+  EXPECT_DOUBLE_EQ(cmd_vel.linear.x, -0.05);
+
+  // Target at r = 2.0, 60 deg off-axis (high curvature): limit is 0.15 * (2.0 - 1.25) / 1.25
+  target.position.x = 1.0;
+  target.position.y = std::sqrt(3.0);
+  cmd_vel = scl.calculateRegularVelocity(target);
+  EXPECT_NEAR(std::fabs(cmd_vel.angular.z), 0.09, 1e-6);
+  EXPECT_GT(cmd_vel.linear.x, 0.0);
+
+  // Target at r = 3.0, outside the slowdown radius: only the plain limit applies
+  target.position.x = 1.5;
+  target.position.y = 1.5 * std::sqrt(3.0);
+  cmd_vel = scl.calculateRegularVelocity(target);
+  EXPECT_GT(std::fabs(cmd_vel.angular.z), 0.09);
+  EXPECT_LE(std::fabs(cmd_vel.angular.z), 0.15);
+
+  // Disabling the stop radius restores the ramp to zero at the target
+  scl.setAngularStopRadius(0.0);
+  target.position.x = 0.8;
+  target.position.y = 0.3;
+  cmd_vel = scl.calculateRegularVelocity(target);
+  EXPECT_GT(std::fabs(cmd_vel.angular.z), 0.0);
+}
+
 TEST(SmoothControlLawTest, calculateNextPose) {
   // Initialize SmoothControlLaw
   SCLFixture scl(1.0, 10.0, 0.2, 2.0, 0.1, 0.0, 1.0, 1.0);

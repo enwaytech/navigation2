@@ -214,6 +214,7 @@ For debugging purposes, there are several publishers which can be used with RVIZ
 | odom_topic        | The topic to use for the odometry data | string |  "odom"      |
 | rotation_angular_tolerance  | Angular tolerance (rad) to exit the rotation loop when rotate_to_dock is enabled | double | 0.05      |
 | dock_prestaging_tolerance  |  L2 distance in X,Y,Theta from the staging pose to bypass navigation | double |  0.5      |
+| lateral_error_tolerance  | Maximum lateral offset (m) of the robot in the dock pose frame while approaching straight (inside controller.angular_stop_radius); the approach fails when exceeded. 0.0 disables | double |  0.0      |
 | dock_plugins  | A set of dock plugins to load | vector<string> |  N/A      |
 | dock_database  |  The filepath to the dock database to use for this environment | string |  N/A  |
 | docks  |  Instead of `dock_database`, the set of docks specified in the params file itself | vector<string> | N/A     |
@@ -226,6 +227,8 @@ For debugging purposes, there are several publishers which can be used with RVIZ
 | controller.v_linear_max | Maximum linear velocity (m/s) | double | 0.25    |
 | controller.v_angular_max | Maximum angular velocity (rad/s) produced by the control law | double | 0.75    |
 | controller.slowdown_radius | Radius (m) around the goal pose in which the robot will start to slow down | double | 0.25     |
+| controller.angular_slowdown_radius | Radius (m) around the goal pose in which the angular velocity limit ramps down linearly. 0.0 disables | double | 0.0     |
+| controller.angular_stop_radius | Radius (m) around the goal pose below which the angular velocity is zero and the robot drives straight. The ramp of angular_slowdown_radius reaches zero here instead of at the goal | double | 0.0     |
 | controller.rotate_to_heading_angular_vel | Angular velocity (rad/s) to rotate to the goal heading when rotate_to_dock is enabled | double | 1.0    |
 | controller.rotate_to_heading_max_angular_accel | Maximum angular acceleration (rad/s^2) to rotate to the goal heading when rotate_to_dock is enabled | double | 3.2    |
 | controller.use_collision_detection | Whether to use collision detection to avoid obstacles | bool | true     |

@@ -15,6 +15,7 @@
 #ifndef OPENNAV_DOCKING__UTILS_HPP_
 #define OPENNAV_DOCKING__UTILS_HPP_
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -179,6 +180,20 @@ inline double l2Norm(const geometry_msgs::msg::Pose & a, const geometry_msgs::ms
     (a.position.x - b.position.x) * (a.position.x - b.position.x) +
     (a.position.y - b.position.y) * (a.position.y - b.position.y) +
     delta_angle * delta_angle);
+}
+
+/**
+ * @brief Lateral offset (y) of the robot in the dock pose frame.
+ * @param dock_pose_in_base_frame Dock pose expressed in the robot base frame. The robot sits at
+ * the origin of that frame, so the result is the y component of the inverse transform.
+ * @return Lateral offset (m), positive towards the dock frame's y axis.
+ */
+inline double robotLateralOffsetInDockFrame(
+  const geometry_msgs::msg::Pose & dock_pose_in_base_frame)
+{
+  const double yaw = tf2::getYaw(dock_pose_in_base_frame.orientation);
+  const auto & position = dock_pose_in_base_frame.position;
+  return std::sin(yaw) * position.x - std::cos(yaw) * position.y;
 }
 
 inline DockDirection getDockDirectionFromString(const std::string & direction)

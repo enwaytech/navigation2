@@ -79,6 +79,12 @@ public:
     const geometry_msgs::msg::Twist & current_velocity,
     const double & dt);
 
+  /**
+   * @brief Get the radius around the target below which the control law stops steering.
+   * @returns Angular stop radius (m), 0.0 if disabled.
+   */
+  double getAngularStopRadius() const {return angular_stop_radius_;}
+
 protected:
   /**
    * @brief Check if a trajectory is collision free.
@@ -135,6 +141,7 @@ protected:
   double k_phi_, k_delta_, beta_, lambda_;
   double slowdown_radius_, v_linear_min_, v_linear_max_, v_angular_max_;
   double angular_slowdown_radius_;
+  double angular_stop_radius_;
   double rotate_to_heading_angular_vel_, rotate_to_heading_max_angular_accel_;
 
   // The trajectory of the robot while dock / undock for visualization / debug purposes

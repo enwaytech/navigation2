@@ -23,10 +23,10 @@ namespace nav2_graceful_controller
 SmoothControlLaw::SmoothControlLaw(
   double k_phi, double k_delta, double beta, double lambda, double slowdown_radius,
   double v_linear_min, double v_linear_max, double v_angular_max,
-  double angular_slowdown_radius)
+  double angular_slowdown_radius, double angular_stop_radius)
 : k_phi_(k_phi), k_delta_(k_delta), beta_(beta), lambda_(lambda), slowdown_radius_(slowdown_radius),
   v_linear_min_(v_linear_min), v_linear_max_(v_linear_max), v_angular_max_(v_angular_max),
-  angular_slowdown_radius_(angular_slowdown_radius)
+  angular_slowdown_radius_(angular_slowdown_radius), angular_stop_radius_(angular_stop_radius)
 {
 }
 
@@ -57,6 +57,11 @@ void SmoothControlLaw::setAngularSlowdownRadius(const double angular_slowdown_ra
   angular_slowdown_radius_ = angular_slowdown_radius;
 }
 
+void SmoothControlLaw::setAngularStopRadius(const double angular_stop_radius)
+{
+  angular_stop_radius_ = angular_stop_radius;
+}
+
 geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   const geometry_msgs::msg::Pose & target, const geometry_msgs::msg::Pose & current,
   const bool & backward)
@@ -82,10 +87,20 @@ geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   // Set the velocity to negative if the robot is moving backwards
   v = backward ? -v : v;
 
-  // Slowdown the angular velocity near the target
+  // Slowdown the angular velocity near the target: the limit ramps linearly from v_angular_max_
+  // at angular_slowdown_radius_ down to zero at angular_stop_radius_ (at the target if the stop
+  // radius is disabled). Inside the stop radius the robot drives straight.
+  // With only a stop radius (no slowdown radius) there is no ramp: the angular velocity is cut
+  // to zero in one step at the stop radius.
   double v_angular_limit = v_angular_max_;
-  if (angular_slowdown_radius_ > 0.0) {
-    v_angular_limit = v_angular_max_ * std::min(1.0, ego_coords.r / angular_slowdown_radius_);
+  if (angular_slowdown_radius_ > 0.0 || angular_stop_radius_ > 0.0) {
+    const double stop_radius = std::max(angular_stop_radius_, 0.0);
+    const double ramp_length = angular_slowdown_radius_ - stop_radius;
+    double ramp = ego_coords.r > stop_radius ? 1.0 : 0.0;
+    if (ramp_length > 0.0) {
+      ramp = std::clamp((ego_coords.r - stop_radius) / ramp_length, 0.0, 1.0);
+    }
+    v_angular_limit = v_angular_max_ * ramp;
   }
 
   // Compute the angular velocity
@@ -95,8 +110,9 @@ geometry_msgs::msg::Twist SmoothControlLaw::calculateRegularVelocity(
   // And linear velocity to follow the curvature
   v = (curvature != 0.0) ? (w_bound / curvature) : v;
 
-  // Reapply velocity limits
-  v = std::copysign(std::clamp(std::fabs(v), v_linear_min_, v_linear_max_), v);
+  // Reapply velocity limits, keeping the direction of motion even when the angular limit is zero
+  const double v_sign = backward ? -1.0 : 1.0;
+  v = v_sign * std::clamp(std::fabs(v), v_linear_min_, v_linear_max_);
 
   // Return the velocity command
   geometry_msgs::msg::Twist cmd_vel;

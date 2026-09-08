@@ -57,6 +57,9 @@ struct Parameters
   // How far past the target along the robot's own forward axis (opposite for backward docks) is
   // tolerated before aborting
   double overshoot_margin;
+  // Maximum lateral offset (m) of the robot in the dock pose frame, checked while the controller
+  // no longer steers (inside controller.angular_stop_radius). Zero or negative disables the check
+  double lateral_error_tolerance;
   // Does the robot drive backwards onto the dock? Default is forwards
   std::optional<bool> dock_backwards;
   // Parameters for OdomSmoother

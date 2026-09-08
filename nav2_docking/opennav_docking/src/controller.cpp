@@ -14,6 +14,8 @@
 // limitations under the License.
 
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 #include "rclcpp/rclcpp.hpp"
 #include "opennav_docking/controller.hpp"
@@ -25,6 +27,17 @@ using rcl_interfaces::msg::ParameterType;
 
 namespace opennav_docking
 {
+
+namespace
+{
+// The angular velocity ramps down from the slowdown radius to the stop radius, so the stop radius
+// has to lie inside it. A stop radius without a slowdown radius is allowed: it cuts the angular
+// velocity to zero in one step.
+bool angularRadiiValid(double angular_slowdown_radius, double angular_stop_radius)
+{
+  return angular_slowdown_radius <= 0.0 || angular_stop_radius <= angular_slowdown_radius;
+}
+}  // namespace
 
 Controller::Controller(
   const nav2::LifecycleNode::SharedPtr & node, std::shared_ptr<tf2_ros::Buffer> tf,
@@ -45,6 +58,14 @@ Controller::Controller(
   slowdown_radius_ = node->declare_or_get_parameter("controller.slowdown_radius", 0.25);
   angular_slowdown_radius_ = node->declare_or_get_parameter(
     "controller.angular_slowdown_radius", 0.0);
+  angular_stop_radius_ = node->declare_or_get_parameter(
+    "controller.angular_stop_radius", 0.0);
+  if (!angularRadiiValid(angular_slowdown_radius_, angular_stop_radius_)) {
+    throw std::runtime_error{
+            "controller.angular_stop_radius (" + std::to_string(angular_stop_radius_) +
+            ") must not be larger than controller.angular_slowdown_radius (" +
+            std::to_string(angular_slowdown_radius_) + ")"};
+  }
   rotate_to_heading_angular_vel_ = node->declare_or_get_parameter(
     "controller.rotate_to_heading_angular_vel", 1.0);
   rotate_to_heading_max_angular_accel_ = node->declare_or_get_parameter(
@@ -66,7 +87,7 @@ Controller::Controller(
 
   control_law_ = std::make_unique<nav2_graceful_controller::SmoothControlLaw>(
     k_phi_, k_delta_, beta_, lambda_, slowdown_radius_, v_linear_min_, v_linear_max_,
-    v_angular_max_, angular_slowdown_radius_);
+    v_angular_max_, angular_slowdown_radius_, angular_stop_radius_);
 
   // Add callback for dynamic parameters
   post_set_params_handler_ = node->add_post_set_parameters_callback(
@@ -218,6 +239,8 @@ rcl_interfaces::msg::SetParametersResult Controller::validateParameterUpdatesCal
 {
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
+  double new_angular_slowdown_radius = angular_slowdown_radius_;
+  double new_angular_stop_radius = angular_stop_radius_;
   for (const auto & parameter : parameters) {
     const auto & param_type = parameter.get_type();
     const auto & param_name = parameter.get_name();
@@ -232,7 +255,20 @@ rcl_interfaces::msg::SetParametersResult Controller::validateParameterUpdatesCal
         param_name.c_str(), parameter.as_double());
         result.successful = false;
       }
+      if (param_name == "controller.angular_slowdown_radius") {
+        new_angular_slowdown_radius = parameter.as_double();
+      } else if (param_name == "controller.angular_stop_radius") {
+        new_angular_stop_radius = parameter.as_double();
+      }
     }
+  }
+
+  if (!angularRadiiValid(new_angular_slowdown_radius, new_angular_stop_radius)) {
+    RCLCPP_WARN(
+      logger_, "controller.angular_stop_radius (%f) must not be larger than "
+      "controller.angular_slowdown_radius (%f). Ignoring parameter update.",
+      new_angular_stop_radius, new_angular_slowdown_radius);
+    result.successful = false;
   }
   return result;
 }
@@ -267,6 +303,8 @@ Controller::updateParametersCallback(const std::vector<rclcpp::Parameter> & para
         slowdown_radius_ = parameter.as_double();
       } else if (param_name == "controller.angular_slowdown_radius") {
         angular_slowdown_radius_ = parameter.as_double();
+      } else if (param_name == "controller.angular_stop_radius") {
+        angular_stop_radius_ = parameter.as_double();
       } else if (param_name == "controller.rotate_to_heading_angular_vel") {
         rotate_to_heading_angular_vel_ = parameter.as_double();
       } else if (param_name == "controller.rotate_to_heading_max_angular_accel") {
@@ -284,6 +322,7 @@ Controller::updateParametersCallback(const std::vector<rclcpp::Parameter> & para
       control_law_->setSlowdownRadius(slowdown_radius_);
       control_law_->setSpeedLimit(v_linear_min_, v_linear_max_, v_angular_max_);
       control_law_->setAngularSlowdownRadius(angular_slowdown_radius_);
+      control_law_->setAngularStopRadius(angular_stop_radius_);
     }
   }
 }

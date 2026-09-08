@@ -136,6 +136,34 @@ TEST(UtilsTests, parseDockFile2)
   EXPECT_FALSE(utils::parseDockFile(filepath, node, db));
 }
 
+TEST(UtilsTests, robotLateralOffsetInDockFrame)
+{
+  geometry_msgs::msg::Pose dock_in_base;
+
+  // Dock 2 m behind the robot, facing away, robot offset 0.3 m to the robot's left
+  dock_in_base.position.x = -2.0;
+  dock_in_base.position.y = 0.3;
+  dock_in_base.orientation = nav2_util::geometry_utils::orientationAroundZAxis(M_PI);
+  EXPECT_NEAR(utils::robotLateralOffsetInDockFrame(dock_in_base), 0.3, 1e-9);
+
+  // Dock 2 m ahead, same heading as the robot: the offset flips sign in the dock frame
+  dock_in_base.position.x = 2.0;
+  dock_in_base.orientation = nav2_util::geometry_utils::orientationAroundZAxis(0.0);
+  EXPECT_NEAR(utils::robotLateralOffsetInDockFrame(dock_in_base), -0.3, 1e-9);
+
+  // Dock rotated 90 deg: the robot's forward offset becomes lateral in the dock frame
+  dock_in_base.position.x = 1.0;
+  dock_in_base.position.y = 1.0;
+  dock_in_base.orientation = nav2_util::geometry_utils::orientationAroundZAxis(M_PI_2);
+  EXPECT_NEAR(utils::robotLateralOffsetInDockFrame(dock_in_base), 1.0, 1e-9);
+
+  // Robot exactly on the dock axis
+  dock_in_base.position.x = -1.5;
+  dock_in_base.position.y = 0.0;
+  dock_in_base.orientation = nav2_util::geometry_utils::orientationAroundZAxis(M_PI);
+  EXPECT_NEAR(utils::robotLateralOffsetInDockFrame(dock_in_base), 0.0, 1e-9);
+}
+
 TEST(UtilsTests, testgetDockPoseStamped)
 {
   Dock d;

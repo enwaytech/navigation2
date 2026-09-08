@@ -45,11 +45,15 @@ public:
    * @param v_angular_max Maximum angular velocity.
    * @param angular_slowdown_radius Radial threshold applied to the angular slowdown rule.
    *                                Default: 0.0 - disabled
+   * @param angular_stop_radius Radial threshold below which the angular velocity is zero, so the
+   *                            robot drives straight. The angular limit ramps linearly from
+   *                            v_angular_max at angular_slowdown_radius to zero at this radius.
+   *                            Default: 0.0 - the ramp reaches zero at the target
    */
   SmoothControlLaw(
     double k_phi, double k_delta, double beta, double lambda, double slowdown_radius,
     double v_linear_min, double v_linear_max, double v_angular_max,
-    double angular_slowdown_radius = 0.0);
+    double angular_slowdown_radius = 0.0, double angular_stop_radius = 0.0);
 
   /**
    * @brief Destructor for nav2_graceful_controller::SmoothControlLaw
@@ -91,6 +95,14 @@ public:
    *   Zero or negative disables the slowdown.
    */
   void setAngularSlowdownRadius(const double angular_slowdown_radius);
+
+  /**
+   * @brief Set the angular stop radius
+   *
+   * @param angular_stop_radius Radius below which the angular velocity is zero (drive straight).
+   *   Only used when the angular slowdown is enabled.
+   */
+  void setAngularStopRadius(const double angular_stop_radius);
 
   /**
    * @brief Compute linear and angular velocities command using the curvature.
@@ -200,6 +212,11 @@ protected:
    * @brief Radial threshold below which the angular velocity limit is reduced
    */
   double angular_slowdown_radius_{0.0};
+
+  /**
+   * @brief Radial threshold below which the angular velocity is zero
+   */
+  double angular_stop_radius_{0.0};
 };
 
 }  // namespace nav2_graceful_controller

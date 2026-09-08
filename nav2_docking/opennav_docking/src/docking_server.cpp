@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
+#include <string>
+
 #include "angles/angles.h"
 #include "opennav_docking/docking_server.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -557,6 +560,24 @@ bool DockingServer::approachDock(
     target_pose.pose.position.x += cos(yaw) * backward_projection;
     target_pose.pose.position.y += sin(yaw) * backward_projection;
     tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
+
+    // Once the control law stops steering (inside its angular stop radius) the robot rolls
+    // straight and a lateral offset in the dock frame can no longer be corrected: fail early
+    // instead of reaching the dock misaligned
+    if (params_->lateral_error_tolerance > 0.0) {
+      const double distance_to_target = std::hypot(
+        target_pose.pose.position.x, target_pose.pose.position.y);
+      if (distance_to_target < controller_->getAngularStopRadius()) {
+        const double lateral_error =
+          utils::robotLateralOffsetInDockFrame(dock_pose_in_base_frame.pose);
+        if (std::fabs(lateral_error) > params_->lateral_error_tolerance) {
+          throw opennav_docking_core::FailedToControl(
+                  "Lateral error of " + std::to_string(lateral_error) + " m in the dock frame "
+                  "exceeds the tolerance of " + std::to_string(params_->lateral_error_tolerance) +
+                  " m while approaching straight");
+        }
+      }
+    }
 
     // Make sure that the target pose is pointing at the robot when moving backwards
     // This is to ensure that the robot doesn't try to dock from the wrong side
