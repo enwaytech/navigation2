@@ -196,14 +196,14 @@ void DockingServer::dockRobot()
   num_retries_ = 0;
 
   auto stop_docking = [this, &dock, &goal](bool successful) {
-    publishZeroVelocity();
-    if (dock) {
-      RCLCPP_INFO(get_logger(), "Stopping detection process");
-      dock->plugin->stopDetectionProcess();
-    }
-    // Store dock state for later undocking and delete temp dock, if applicable
-    stashDockData(goal->use_dock_id, dock, successful);
-  };
+      publishZeroVelocity();
+      if (dock) {
+        RCLCPP_INFO(get_logger(), "Stopping detection process");
+        dock->plugin->stopDetectionProcess();
+      }
+      // Store dock state for later undocking and delete temp dock, if applicable
+      stashDockData(goal->use_dock_id, dock, successful);
+    };
 
   try {
     // Get dock (instance and plugin information) from request
@@ -256,8 +256,7 @@ void DockingServer::dockRobot()
     tf2_buffer_->transform(dock_pose, dock_pose, params_->fixed_frame);
 
     // Get initial detection of dock before proceeding to move
-    if (!doInitialPerception(dock, dock_pose))
-    {
+    if (!doInitialPerception(dock, dock_pose)) {
       // Cancelled, preempted, or shutting down
       stop_docking(false);
       docking_action_server_->terminate_all(result);
@@ -283,12 +282,12 @@ void DockingServer::dockRobot()
     while (rclcpp::ok()) {
       if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
         checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
-        {
-          stop_docking(false);
-          docking_action_server_->terminate_all(result);
-          RCLCPP_INFO(get_logger(), "Canceled or preempted while docking");
-          return;
-        }
+      {
+        stop_docking(false);
+        docking_action_server_->terminate_all(result);
+        RCLCPP_INFO(get_logger(), "Canceled or preempted while docking");
+        return;
+      }
 
       try {
         // Perform a 180º to face away from the dock if needed
