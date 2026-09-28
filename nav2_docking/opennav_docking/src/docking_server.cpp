@@ -533,7 +533,7 @@ bool DockingServer::approachDock(
 
     // Detect overshoot: the target should stay behind the robot's own forward axis while
     // approaching backward (ahead of it while approaching forward). If the robot has passed it,
-    // the controller will behave badly
+    // the controller could only reach it with an undesired large loop
     geometry_msgs::msg::PoseStamped dock_pose_in_base_frame = dock_pose;
     dock_pose_in_base_frame.header.stamp = rclcpp::Time(0);
     tf2_buffer_->transform(dock_pose_in_base_frame, dock_pose_in_base_frame, params_->base_frame);
@@ -619,6 +619,9 @@ bool DockingServer::waitForCharge(Dock * dock)
 bool DockingServer::resetApproach(
   const geometry_msgs::msg::PoseStamped & staging_pose, bool backward)
 {
+  // The reset drives away from the dock = in the opposite direction of the approach
+  const bool reset_backward = !backward;
+
   rclcpp::Rate loop_rate(params_->controller_frequency);
   auto start = this->now();
   auto timeout = rclcpp::Duration::from_seconds(params_->dock_approach_timeout);
@@ -633,13 +636,28 @@ bool DockingServer::resetApproach(
       return false;
     }
 
+    // Detect overshoot (opposite approachDock): The staging pose should stay ahead of the robot
+    // while driving forward (behind it while driving backward). If the robot has passed it,
+    // the controller could only reach it with an undesired large loop
+    geometry_msgs::msg::PoseStamped staging_pose_in_base_frame = staging_pose;
+    staging_pose_in_base_frame.header.stamp = rclcpp::Time(0);
+    tf2_buffer_->transform(
+      staging_pose_in_base_frame, staging_pose_in_base_frame, params_->base_frame);
+    const bool passed_staging_pose = reset_backward ?
+      (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
+      (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
+    if (passed_staging_pose) {
+      RCLCPP_INFO(get_logger(), "Robot is already past the staging pose, reset approach done");
+      return true;
+    }
+
     // Compute and publish command
     auto command = std::make_unique<geometry_msgs::msg::TwistStamped>();
     command->header.stamp = now();
     if (getCommandToPose(
         command->twist, staging_pose, params_->undock_linear_tolerance,
         params_->undock_angular_tolerance, false,
-        !backward))
+        reset_backward))
     {
       return true;
     }
@@ -778,14 +796,30 @@ void DockingServer::undockRobot()
         continue;
       }
 
+      // Detect overshoot: The staging pose should stay ahead of the robot while undocking forward
+      // (behind it while undocking backward). If the robot has passed it, the controller could
+      // only reach it with an undesired large loop
+      const bool undock_backward = !dock_backward;
+      geometry_msgs::msg::PoseStamped staging_pose_in_base_frame = staging_pose;
+      staging_pose_in_base_frame.header.stamp = rclcpp::Time(0);
+      tf2_buffer_->transform(
+        staging_pose_in_base_frame, staging_pose_in_base_frame, params_->base_frame);
+      const bool passed_staging_pose = undock_backward ?
+        (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
+        (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
+      if (passed_staging_pose) {
+        RCLCPP_INFO(get_logger(), "Robot is already past the staging pose");
+      }
+
       // Get command to approach staging pose
       auto command = std::make_unique<geometry_msgs::msg::TwistStamped>();
       command->header.stamp = now();
 
-      if (getCommandToPose(
+      if (passed_staging_pose ||
+        getCommandToPose(
           command->twist, staging_pose, params_->undock_linear_tolerance,
           params_->undock_angular_tolerance, false,
-          !dock_backward))
+          undock_backward))
       {
         // Perform a 180º to the original staging pose
         if (dock->shouldRotateToDock()) {

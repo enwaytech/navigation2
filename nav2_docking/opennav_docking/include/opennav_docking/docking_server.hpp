@@ -115,7 +115,7 @@ public:
   /**
    * @brief Reset the robot for another approach by controlling back to staging pose.
    * @param staging_pose The target pose that will reset for another approach.
-   * @param backward If true, the robot will drive backwards.
+   * @param backward Direction of the dock approach. The reset drives in the opposite direction.
    * @returns True if reset is successful.
    */
   bool resetApproach(const geometry_msgs::msg::PoseStamped & staging_pose, bool backward);
