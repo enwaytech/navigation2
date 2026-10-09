@@ -110,6 +110,7 @@ void CriticManager::evalTrajectoriesScores(
   static std::vector<double> critic_time_min;
   static std::vector<double> critic_time_max;
   static std::vector<size_t> critic_spike_count;
+  static std::vector<std::vector<double>> critic_samples;
   static double eval_total_accum = 0.0;
   constexpr size_t kAvgWindow = 500;
   // A sample counts as a spike if it exceeds this multiple of the critic's running
@@ -123,6 +124,7 @@ void CriticManager::evalTrajectoriesScores(
     critic_time_min.assign(critics_.size(), std::numeric_limits<double>::max());
     critic_time_max.assign(critics_.size(), 0.0);
     critic_spike_count.assign(critics_.size(), 0);
+    critic_samples.assign(critics_.size(), {});
     eval_count = 0;
     eval_total_accum = 0.0;
   }
@@ -159,6 +161,7 @@ void CriticManager::evalTrajectoriesScores(
     critic_time_sumsq_accum[i] += critic_us * critic_us;
     critic_time_min[i] = std::min(critic_time_min[i], critic_us);
     critic_time_max[i] = std::max(critic_time_max[i], critic_us);
+    critic_samples[i].push_back(critic_us);
 
     // Calculate cost contribution from this critic
     if (visualize_per_critic_costs_ || publish_critics_stats_) {
@@ -187,13 +190,26 @@ void CriticManager::evalTrajectoriesScores(
   eval_count++;
 
   if (eval_count >= kAvgWindow) {
-    std::cout << "--- Critics avg over " << kAvgWindow << " evals (total="
-      << eval_total_accum / kAvgWindow << " us) ---" << std::endl;
     for (size_t i = 0; i < critics_.size(); ++i) {
+      if (critic_names_[i] != "CostCritic") {
+        continue;
+      }
       double mean = critic_time_accum[i] / kAvgWindow;
       double variance = critic_time_sumsq_accum[i] / kAvgWindow - mean * mean;
       double stddev = variance > 0.0 ? std::sqrt(variance) : 0.0;
-      std::cout << "  " << critic_names_[i] << ": avg=" << mean << " us, min="
+      auto & samples = critic_samples[i];
+      auto percentile = [&samples](double p) {
+          if (samples.empty()) {
+            return 0.0;
+          }
+          auto nth = samples.begin() + static_cast<size_t>(p * (samples.size() - 1));
+          std::nth_element(samples.begin(), nth, samples.end());
+          return *nth;
+        };
+      double median = percentile(0.50);
+      double p95 = percentile(0.95);
+      std::cout << "  " << critic_names_[i] << ": avg=" << mean << " us, median="
+        << median << " us, p95=" << p95 << " us, min="
         << critic_time_min[i] << " us, max=" << critic_time_max[i]
         << " us, stddev=" << stddev << " us, spikes(>"
         << kSpikeMultiplier << "x running mean)=" << critic_spike_count[i]
@@ -205,6 +221,9 @@ void CriticManager::evalTrajectoriesScores(
       std::numeric_limits<double>::max());
     std::fill(critic_time_max.begin(), critic_time_max.end(), 0.0);
     std::fill(critic_spike_count.begin(), critic_spike_count.end(), 0);
+    for (auto & samples : critic_samples) {
+      samples.clear();
+    }
     eval_total_accum = 0.0;
     eval_count = 0;
   }

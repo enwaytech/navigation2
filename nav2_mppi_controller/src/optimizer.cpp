@@ -302,10 +302,10 @@ void Optimizer::optimize()
   // }
 
   if (opt_count >= kAvgWindow) {
-    std::cout << "optimize avg(" << kAvgWindow << "): generateNoised="
-      << gen_accum / kAvgWindow << "us evalCritics="
-      << eval_accum / kAvgWindow << "us updateCtrl="
-      << update_accum / kAvgWindow << "us" << std::endl;
+    // std::cout << "optimize avg(" << kAvgWindow << "): generateNoised="
+    //   << gen_accum / kAvgWindow << "us evalCritics="
+    //   << eval_accum / kAvgWindow << "us updateCtrl="
+    //   << update_accum / kAvgWindow << "us" << std::endl;
     gen_accum = eval_accum = update_accum = 0.0;
     opt_count = 0;
   }
