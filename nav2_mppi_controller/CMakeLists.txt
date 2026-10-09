@@ -84,7 +84,6 @@ add_library(mppi_critics SHARED
   src/critics/angular_velocity_speed_limit_critic.cpp
   src/critics/constraint_critic.cpp
   src/critics/cost_critic.cpp
-  src/critics/cost_critic_benchmark.cpp
   src/critics/cost_speed_limit_critic.cpp
   src/critics/direction_change_critic.cpp
   src/critics/goal_critic.cpp
