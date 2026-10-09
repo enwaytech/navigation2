@@ -205,12 +205,10 @@ void CostCritic::score(CriticData & data)
     data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
     Eigen::Stride<-1, -1>(outer_stride, 1));
 
-  const unsigned char * charmap = costmap->getCharMap();
-
 #ifdef _OPENMP
   #pragma omp parallel for \
   default(none) \
-  shared(repulsive_cost, charmap, near_goal, footprint, \
+  shared(repulsive_cost, costmap, near_goal, footprint, \
   strided_traj_rows, strided_traj_cols, traj_x, traj_y, traj_yaw) \
   reduction(&&:all_trajectories_collide) \
   schedule(dynamic) \
@@ -234,7 +232,7 @@ void CostCritic::score(CriticData & data)
       if (!worldToMapFloat(Tx, Ty, x_i, y_i)) {
         pose_cost = 255.0f;  // NO_INFORMATION in float
       } else {
-        pose_cost = static_cast<float>(charmap[getIndex(x_i, y_i)]);
+        pose_cost = static_cast<float>(costmap->getCost(getIndex(x_i, y_i)));
         if (pose_cost < 1.0f) {
           continue;  // In free space
         }
