@@ -213,7 +213,7 @@ void CostCritic::score(CriticData & data)
   shared(repulsive_cost, charmap, near_goal, footprint, \
   strided_traj_rows, strided_traj_cols, traj_x, traj_y, traj_yaw) \
   reduction(&&:all_trajectories_collide) \
-  schedule(dynamic, 16) \
+  schedule(dynamic) \
   num_threads(getOptimalThreadCount())
 #endif
   for (int i = 0; i < strided_traj_rows; ++i) {
