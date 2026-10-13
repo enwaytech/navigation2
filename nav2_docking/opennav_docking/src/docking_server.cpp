@@ -700,6 +700,7 @@ bool DockingServer::getCommandToPose(
   geometry_msgs::msg::PoseStamped target_pose = pose;
   target_pose.header.stamp = rclcpp::Time(0);
   tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
+  docking_target_pub_->publish(std::make_unique<geometry_msgs::msg::PoseStamped>(target_pose));
 
   // Compute velocity command
   if (!controller_->computeVelocityCommand(target_pose.pose, cmd, is_docking, backward)) {
