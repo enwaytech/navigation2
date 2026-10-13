@@ -550,9 +550,7 @@ bool DockingServer::approachDock(
     // Detect overshoot: the target should stay behind the robot's own forward axis while
     // approaching backward (ahead of it while approaching forward). If the robot has passed it,
     // the controller could only reach it with an undesired large loop
-    geometry_msgs::msg::PoseStamped dock_pose_in_base_frame = dock_pose;
-    dock_pose_in_base_frame.header.stamp = rclcpp::Time(0);
-    tf2_buffer_->transform(dock_pose_in_base_frame, dock_pose_in_base_frame, params_->base_frame);
+    const auto dock_pose_in_base_frame = getPoseInBaseFrame2D(dock_pose);
     const bool overshot = backward ?
       (dock_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
       (dock_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
@@ -560,9 +558,7 @@ bool DockingServer::approachDock(
       throw opennav_docking_core::FailedToControl("Overshot the dock pose while approaching");
     }
 
-    // Transform target_pose into base_link frame
     geometry_msgs::msg::PoseStamped target_pose = dock_pose;
-    target_pose.header.stamp = rclcpp::Time(0);
 
     // The control law can get jittery when close to the end when atan2's can explode.
     // Thus, we backward project the controller's target pose a little bit after the
@@ -572,7 +568,7 @@ bool DockingServer::approachDock(
     const double yaw = tf2::getYaw(target_pose.pose.orientation);
     target_pose.pose.position.x += cos(yaw) * backward_projection;
     target_pose.pose.position.y += sin(yaw) * backward_projection;
-    tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
+    target_pose = getPoseInBaseFrame2D(target_pose);
 
     // Make sure that the target pose is pointing at the robot when moving backwards
     // This is to ensure that the robot doesn't try to dock from the wrong side
@@ -657,10 +653,7 @@ bool DockingServer::resetApproach(
     // Detect overshoot (opposite approachDock): The staging pose should stay ahead of the robot
     // while driving forward (behind it while driving backward). If the robot has passed it,
     // the controller could only reach it with an undesired large loop
-    geometry_msgs::msg::PoseStamped staging_pose_in_base_frame = staging_pose;
-    staging_pose_in_base_frame.header.stamp = rclcpp::Time(0);
-    tf2_buffer_->transform(
-      staging_pose_in_base_frame, staging_pose_in_base_frame, params_->base_frame);
+    const auto staging_pose_in_base_frame = getPoseInBaseFrame2D(staging_pose);
     const bool passed_staging_pose = reset_backward ?
       (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
       (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
@@ -709,10 +702,7 @@ bool DockingServer::getCommandToPose(
     return true;
   }
 
-  // Transform target_pose into base_link frame
-  geometry_msgs::msg::PoseStamped target_pose = pose;
-  target_pose.header.stamp = rclcpp::Time(0);
-  tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
+  const auto target_pose = getPoseInBaseFrame2D(pose);
   docking_target_pub_->publish(std::make_unique<geometry_msgs::msg::PoseStamped>(target_pose));
 
   // Compute velocity command
@@ -819,10 +809,7 @@ void DockingServer::undockRobot()
       // (behind it while undocking backward). If the robot has passed it, the controller could
       // only reach it with an undesired large loop
       const bool undock_backward = !dock_backward;
-      geometry_msgs::msg::PoseStamped staging_pose_in_base_frame = staging_pose;
-      staging_pose_in_base_frame.header.stamp = rclcpp::Time(0);
-      tf2_buffer_->transform(
-        staging_pose_in_base_frame, staging_pose_in_base_frame, params_->base_frame);
+      const auto staging_pose_in_base_frame = getPoseInBaseFrame2D(staging_pose);
       const bool passed_staging_pose = undock_backward ?
         (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
         (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
@@ -903,6 +890,24 @@ geometry_msgs::msg::PoseStamped DockingServer::getRobotPoseInFrame(const std::st
   robot_pose.header.stamp = rclcpp::Time(0);
   tf2_buffer_->transform(robot_pose, robot_pose, frame);
   return robot_pose;
+}
+
+geometry_msgs::msg::PoseStamped DockingServer::getPoseInBaseFrame2D(
+  const geometry_msgs::msg::PoseStamped & pose)
+{
+  const auto robot_pose = getRobotPoseInFrame(pose.header.frame_id);
+  const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  const double dx = pose.pose.position.x - robot_pose.pose.position.x;
+  const double dy = pose.pose.position.y - robot_pose.pose.position.y;
+
+  geometry_msgs::msg::PoseStamped pose_in_base_frame;
+  pose_in_base_frame.header.frame_id = params_->base_frame;
+  pose_in_base_frame.header.stamp = robot_pose.header.stamp;
+  pose_in_base_frame.pose.position.x = cos(robot_yaw) * dx + sin(robot_yaw) * dy;
+  pose_in_base_frame.pose.position.y = -sin(robot_yaw) * dx + cos(robot_yaw) * dy;
+  pose_in_base_frame.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(
+    tf2::getYaw(pose.pose.orientation) - robot_yaw);
+  return pose_in_base_frame;
 }
 
 void DockingServer::publishZeroVelocity()

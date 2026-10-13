@@ -142,6 +142,15 @@ public:
   virtual geometry_msgs::msg::PoseStamped getRobotPoseInFrame(const std::string & frame);
 
   /**
+   * @brief Get a pose relative to the robot in base_frame, in 2D: only x, y and yaw are used,
+   * z, roll and pitch of both the pose and the robot are ignored.
+   * @param pose The pose to transform, in a gravity-aligned frame (e.g. odom or map).
+   * @returns The pose in base_frame with z = 0 and a yaw-only orientation, throws TF2 error if failure.
+   */
+  geometry_msgs::msg::PoseStamped getPoseInBaseFrame2D(
+    const geometry_msgs::msg::PoseStamped & pose);
+
+  /**
    * @brief Gets a preempted goal if immediately requested
    * @param Goal goal to check or replace if required with preemption
    * @param action_server Action server to check for preemptions on
