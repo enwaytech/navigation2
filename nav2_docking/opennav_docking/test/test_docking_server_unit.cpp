@@ -20,6 +20,10 @@
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "opennav_docking/docking_server.hpp"
 #include "nav2_ros_common/node_thread.hpp"
+#include "nav2_util/geometry_utils.hpp"
+#include "tf2/LinearMath/Quaternion.hpp"
+#include "tf2/utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 // Testing unit functions in docking server, smoke/system tests in python file
 
@@ -53,6 +57,21 @@ public:
   DockingServerTFShim()
   : DockingServerShim() {}
   std::shared_ptr<tf2_ros::Buffer> getTfBuffer() {return tf2_buffer_;}
+};
+
+// Test shim to set the robot pose returned in any frame
+class DockingServerRobotPoseShim : public DockingServer
+{
+public:
+  DockingServerRobotPoseShim()
+  : DockingServer() {}
+
+  virtual geometry_msgs::msg::PoseStamped getRobotPoseInFrame(const std::string &)
+  {
+    return robot_pose;
+  }
+
+  geometry_msgs::msg::PoseStamped robot_pose;
 };
 
 TEST(DockingServerTests, ObjectLifecycle)
@@ -525,6 +544,58 @@ TEST(DockingServerTests, HandlesPluginStartFailure)
   node->on_deactivate(rclcpp_lifecycle::State());
   node->on_cleanup(rclcpp_lifecycle::State());
   node->shutdown();
+}
+
+TEST(DockingServerTests, getPoseInBaseFrame2DIgnoresHeightAndTilt)
+{
+  auto node = std::make_shared<DockingServerRobotPoseShim>();
+  node->declare_parameter(
+    "docks",
+    rclcpp::ParameterValue(std::vector<std::string>{"test_dock"}));
+  node->declare_parameter(
+    "test_dock.type",
+    rclcpp::ParameterValue(std::string{"dock_plugin"}));
+  node->declare_parameter(
+    "test_dock.pose",
+    rclcpp::ParameterValue(std::vector<double>{0.0, 0.0, 0.0}));
+  node->declare_parameter(
+    "dock_plugins",
+    rclcpp::ParameterValue(std::vector<std::string>{"dock_plugin"}));
+  node->declare_parameter(
+    "dock_plugin.plugin",
+    rclcpp::ParameterValue(std::string{"opennav_docking::TestFailureDock"}));
+  node->on_configure(rclcpp_lifecycle::State());
+
+  // Robot 25 m above the pose, tilted, facing +y
+  tf2::Quaternion robot_orientation;
+  robot_orientation.setRPY(0.01, -0.01, M_PI_2);
+  node->robot_pose.header.frame_id = "odom";
+  node->robot_pose.pose.position.x = 1.0;
+  node->robot_pose.pose.position.y = 2.0;
+  node->robot_pose.pose.position.z = 25.0;
+  node->robot_pose.pose.orientation = tf2::toMsg(robot_orientation);
+
+  // Pose 3 m ahead of the robot, facing -x
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header.frame_id = "odom";
+  pose.pose.position.x = 1.0;
+  pose.pose.position.y = 5.0;
+  pose.pose.position.z = 0.0;
+  pose.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(M_PI);
+
+  // A 3D transform would shift the pose by ~25 m * 0.01 rad = 0.25 m in x and y
+  const auto pose_in_base_frame =
+    node->getPoseInBaseFrame2D(pose, node->getRobotPoseInFrame(pose.header.frame_id));
+  EXPECT_EQ(pose_in_base_frame.header.frame_id, "base_link");
+  EXPECT_NEAR(pose_in_base_frame.pose.position.x, 3.0, 1e-6);
+  EXPECT_NEAR(pose_in_base_frame.pose.position.y, 0.0, 1e-6);
+  EXPECT_NEAR(pose_in_base_frame.pose.position.z, 0.0, 1e-6);
+  EXPECT_NEAR(tf2::getYaw(pose_in_base_frame.pose.orientation), M_PI_2, 1e-6);
+  EXPECT_NEAR(pose_in_base_frame.pose.orientation.x, 0.0, 1e-6);
+  EXPECT_NEAR(pose_in_base_frame.pose.orientation.y, 0.0, 1e-6);
+
+  node->on_cleanup(rclcpp_lifecycle::State());
+  node->on_shutdown(rclcpp_lifecycle::State());
 }
 
 }  // namespace opennav_docking
