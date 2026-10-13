@@ -40,6 +40,7 @@ DockingServer::on_configure(const rclcpp_lifecycle::State & state)
   params_ = param_handler_->getParams();
 
   vel_publisher_ = std::make_unique<nav2_util::TwistPublisher>(node, "cmd_vel");
+  docking_target_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("docking_target");
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
 
   // Create odom subscriber for backward blind docking
@@ -83,6 +84,7 @@ DockingServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
   dock_db_->activate();
   navigator_->activate();
   vel_publisher_->on_activate();
+  docking_target_pub_->on_activate();
   docking_action_server_->activate();
   undocking_action_server_->activate();
   param_handler_->activate();
@@ -104,6 +106,7 @@ DockingServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
   dock_db_->deactivate();
   navigator_->deactivate();
   vel_publisher_->on_deactivate();
+  docking_target_pub_->on_deactivate();
   param_handler_->deactivate();
   tf2_listener_.reset();
 
@@ -125,6 +128,7 @@ DockingServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   curr_dock_type_.clear();
   controller_.reset();
   vel_publisher_.reset();
+  docking_target_pub_.reset();
   params_->dock_backwards.reset();
   odom_sub_.reset();
   return nav2::CallbackReturn::SUCCESS;
@@ -563,6 +567,8 @@ bool DockingServer::approachDock(
       target_pose.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(
         tf2::getYaw(target_pose.pose.orientation) + M_PI);
     }
+    // the target pose handed to the controller, in base_frame
+    docking_target_pub_->publish(std::make_unique<geometry_msgs::msg::PoseStamped>(target_pose));
 
     // Compute and publish controls
     auto command = std::make_unique<geometry_msgs::msg::TwistStamped>();

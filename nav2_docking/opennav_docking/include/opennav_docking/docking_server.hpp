@@ -236,6 +236,7 @@ protected:
   rclcpp::Time action_start_time_;
 
   std::unique_ptr<nav2_util::TwistPublisher> vel_publisher_;
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr docking_target_pub_;
   std::unique_ptr<nav2_util::OdomSmoother> odom_sub_;
   typename DockingActionServer::SharedPtr docking_action_server_;
   typename UndockingActionServer::SharedPtr undocking_action_server_;
