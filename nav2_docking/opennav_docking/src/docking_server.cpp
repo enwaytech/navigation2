@@ -346,6 +346,10 @@ void DockingServer::dockRobot()
         RCLCPP_WARN(get_logger(), "Docking failed, will retry: %s", e.what());
       }
 
+      // stop detection during reset
+      RCLCPP_INFO(get_logger(), "Stopping detection process");
+      dock->plugin->stopDetectionProcess();
+
       // Reset to staging pose to try again (Docking did not return (success or non-recoverable))
       RCLCPP_INFO(get_logger(), "Starting resetApproach");
       if (!resetApproach(staging_pose, dock_backward)) {
@@ -354,7 +358,16 @@ void DockingServer::dockRobot()
         docking_action_server_->terminate_all(result);
         return;
       }
-      RCLCPP_INFO(get_logger(), "Returned to staging pose, attempting docking again");
+      RCLCPP_INFO(get_logger(), "Returned to staging pose");
+
+      // restart the detection before attempting docking again
+      if (!doInitialPerception(dock, dock_pose)) {
+        // Cancelled, preempted, or shutting down
+        stop_docking(false);
+        docking_action_server_->terminate_all(result);
+        return;
+      }
+      RCLCPP_INFO(get_logger(), "Successful dock detection, attempting docking again");
     }
   } catch (const tf2::TransformException & e) {
     result->error_msg = std::string("Transform error: ") + e.what();
