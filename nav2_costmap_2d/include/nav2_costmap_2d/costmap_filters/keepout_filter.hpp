@@ -109,6 +109,13 @@ private:
    * @brief Callback for the filter mask
    */
   void maskCallback(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr & msg);
+  /**
+   * @brief Get the robot height in the costmap frame. The costmap is 2D, so its points are
+   * transformed to the mask frame at the robot height: a tilted transform would otherwise turn
+   * the height difference into an x-y shift.
+   * @return The robot height, or 0 if the robot pose is not available
+   */
+  double getRobotHeight();
 
   nav2::Subscription<nav2_msgs::msg::CostmapFilterInfo>::SharedPtr filter_info_sub_;
   nav2::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mask_sub_;
@@ -116,6 +123,7 @@ private:
   nav_msgs::msg::OccupancyGrid::ConstSharedPtr filter_mask_;
 
   std::string global_frame_;  // Frame of current layer (master_grid)
+  std::string robot_base_frame_;  // Frame of the robot
 
   bool override_lethal_cost_{false};  // If true, lethal cost will be overridden
   unsigned char lethal_override_cost_{252};  // Value to override lethal cost with

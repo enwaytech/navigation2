@@ -78,6 +78,7 @@ void KeepoutFilter::initializeFilter(
     nav2::qos::LatchedSubscriptionQoS());
 
   global_frame_ = layered_costmap_->getGlobalFrameID();
+  robot_base_frame_ = node->declare_or_get_parameter("robot_base_frame", std::string("base_link"));
 
   override_lethal_cost_ = node->declare_or_get_parameter(name_ + "." + "override_lethal_cost",
     false);
@@ -204,7 +205,7 @@ void KeepoutFilter::updateBounds(
     geometry_msgs::msg::Pose pose;
     pose.position.x = robot_x;
     pose.position.y = robot_y;
-    pose.position.z = 0.0;
+    pose.position.z = filter_mask_->header.frame_id != global_frame_ ? getRobotHeight() : 0.0;
     pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(robot_yaw);
     geometry_msgs::msg::Pose mask_pose;
     if (transformPose(global_frame_, pose, filter_mask_->header.frame_id, mask_pose)) {
@@ -261,6 +262,7 @@ void KeepoutFilter::process(
 
   tf2::Transform tf2_transform;
   tf2_transform.setIdentity();  // initialize by identical transform
+  double robot_height = 0.0;  // height in global_frame_ to transform the master_grid points at
   int mg_min_x, mg_min_y;  // master_grid indexes of bottom-left window corner
   int mg_max_x, mg_max_y;  // master_grid indexes of top-right window corner
 
@@ -283,6 +285,7 @@ void KeepoutFilter::process(
       return;
     }
     tf2::fromMsg(transform.transform, tf2_transform);
+    robot_height = getRobotHeight();
 
     mg_min_x = min_i;
     mg_min_y = min_j;
@@ -366,7 +369,7 @@ void KeepoutFilter::process(
       master_grid.mapToWorld(i, j, gl_wx, gl_wy);
       if (mask_frame != global_frame_) {
         // Transform (i, j) point from global_frame_ to mask_frame
-        tf2::Vector3 point(gl_wx, gl_wy, 0);
+        tf2::Vector3 point(gl_wx, gl_wy, robot_height);
         point = tf2_transform * point;
         msk_wx = point.x();
         msk_wy = point.y();
@@ -395,6 +398,20 @@ void KeepoutFilter::process(
   }
 
   last_pose_lethal_ = is_pose_lethal_;
+}
+
+double KeepoutFilter::getRobotHeight()
+{
+  try {
+    return tf_->lookupTransform(
+      global_frame_, robot_base_frame_, tf2::TimePointZero).transform.translation.z;
+  } catch (tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *(clock_), 2000,
+      "KeepoutFilter: Failed to get robot frame (%s) in costmap frame (%s), using height 0: %s",
+      robot_base_frame_.c_str(), global_frame_.c_str(), ex.what());
+    return 0.0;
+  }
 }
 
 void KeepoutFilter::resetFilter()
