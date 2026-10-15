@@ -155,7 +155,7 @@ bool CostmapFilter::transformPose(
 {
   if (mask_frame != global_frame) {
     // Filter mask and current layer are in different frames:
-    // Transform (global_pose.position.x, global_pose.position.y) point from current layer frame
+    // Transform the global_pose position from current layer frame
     // to mask_pose in mask_frame
     geometry_msgs::msg::TransformStamped transform;
     geometry_msgs::msg::PointStamped in, out;
@@ -163,7 +163,7 @@ bool CostmapFilter::transformPose(
     in.header.frame_id = global_frame;
     in.point.x = global_pose.position.x;
     in.point.y = global_pose.position.y;
-    in.point.z = 0.0;
+    in.point.z = global_pose.position.z;
 
     try {
       tf_->transform(in, out, mask_frame, transform_tolerance_);
