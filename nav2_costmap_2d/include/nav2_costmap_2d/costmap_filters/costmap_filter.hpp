@@ -207,7 +207,7 @@ protected:
    * @return The cost to set the cell to
    */
   unsigned char getMaskCost(
-    nav_msgs::msg::OccupancyGrid::ConstSharedPtr filter_mask,
+    const nav_msgs::msg::OccupancyGrid::ConstSharedPtr & filter_mask,
     const unsigned int mx, const unsigned int & my) const;
 
   /**

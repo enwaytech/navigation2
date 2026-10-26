@@ -54,7 +54,7 @@ namespace nav2_util
  * @return True if the conversion was successful (legal bounds) false otherwise
  */
 inline bool worldToMap(
-  nav_msgs::msg::OccupancyGrid::ConstSharedPtr map,
+  const nav_msgs::msg::OccupancyGrid::ConstSharedPtr & map,
   const double wx, const double wy, unsigned int & mx, unsigned int & my)
 {
   const double origin_x = map->info.origin.position.x;
@@ -84,7 +84,7 @@ inline bool worldToMap(
  * @param  wy Will be set to the associated world y coordinate
  */
 inline void mapToWorld(
-  nav_msgs::msg::OccupancyGrid::ConstSharedPtr map,
+  const nav_msgs::msg::OccupancyGrid::ConstSharedPtr & map,
   const unsigned int mx, const unsigned int my, double & wx, double & wy)
 {
   const double origin_x = map->info.origin.position.x;
