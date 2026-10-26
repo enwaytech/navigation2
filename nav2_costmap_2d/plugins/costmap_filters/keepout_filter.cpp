@@ -265,8 +265,9 @@ void KeepoutFilter::process(
   int mg_max_x, mg_max_y;  // master_grid indexes of top-right window corner
 
   const std::string mask_frame = filter_mask_->header.frame_id;
+  const bool transform_needed = mask_frame != global_frame_;
 
-  if (mask_frame != global_frame_) {
+  if (transform_needed) {
     // Filter mask and current layer are in different frames:
     // prepare frame transformation if mask_frame != global_frame_
     geometry_msgs::msg::TransformStamped transform;
@@ -355,16 +356,16 @@ void KeepoutFilter::process(
   unsigned char data, old_data;  // master_grid element data
 
   // Main master_grid updating loop
-  // Iterate in costmap window by master_grid indexes
+  // Iterate in costmap window by master_grid indexes, row by row
   unsigned char * master_array = master_grid.getCharMap();
-  for (i = mg_min_x_u; i < mg_max_x_u; i++) {
-    for (j = mg_min_y_u; j < mg_max_y_u; j++) {
+  for (j = mg_min_y_u; j < mg_max_y_u; j++) {
+    for (i = mg_min_x_u; i < mg_max_x_u; i++) {
       index = master_grid.getIndex(i, j);
       old_data = master_array[index];
       // Calculating corresponding to (i, j) point at filter_mask_:
       // Get world coordinates in global_frame_
       master_grid.mapToWorld(i, j, gl_wx, gl_wy);
-      if (mask_frame != global_frame_) {
+      if (transform_needed) {
         // Transform (i, j) point from global_frame_ to mask_frame
         tf2::Vector3 point(gl_wx, gl_wy, 0);
         point = tf2_transform * point;

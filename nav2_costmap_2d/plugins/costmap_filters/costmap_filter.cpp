@@ -40,6 +40,7 @@
 
 #include "nav2_costmap_2d/costmap_filters/costmap_filter.hpp"
 
+#include <array>
 #include <exception>
 
 #include "nav2_util/geometry_utils.hpp"
@@ -190,8 +191,31 @@ bool CostmapFilter::transformPose(
   return true;
 }
 
+namespace
+{
+
+// Linear conversion from OccupancyGrid data range [OCC_GRID_FREE..OCC_GRID_OCCUPIED]
+// to costmap data range [FREE_SPACE..LETHAL_OBSTACLE]
+unsigned char occupancyToCost(const signed char data)
+{
+  return std::round(
+    static_cast<double>(data) * (LETHAL_OBSTACLE - FREE_SPACE) /
+    (nav2_util::OCC_GRID_OCCUPIED - nav2_util::OCC_GRID_FREE));
+}
+
+// occupancyToCost() of the OccupancyGrid data range, indexed by data
+const std::array<unsigned char, nav2_util::OCC_GRID_OCCUPIED + 1> occupancy_costs = [] {
+    std::array<unsigned char, nav2_util::OCC_GRID_OCCUPIED + 1> costs{};
+    for (int data = nav2_util::OCC_GRID_FREE; data <= nav2_util::OCC_GRID_OCCUPIED; data++) {
+      costs[data] = occupancyToCost(data);
+    }
+    return costs;
+  }();
+
+}  // namespace
+
 unsigned char CostmapFilter::getMaskCost(
-  nav_msgs::msg::OccupancyGrid::ConstSharedPtr filter_mask,
+  const nav_msgs::msg::OccupancyGrid::ConstSharedPtr & filter_mask,
   const unsigned int mx, const unsigned int & my) const
 {
   const unsigned int index = my * filter_mask->info.width + mx;
@@ -199,12 +223,10 @@ unsigned char CostmapFilter::getMaskCost(
   const signed char data = filter_mask->data[index];
   if (data == nav2_util::OCC_GRID_UNKNOWN) {
     return NO_INFORMATION;
+  } else if (data >= nav2_util::OCC_GRID_FREE && data <= nav2_util::OCC_GRID_OCCUPIED) {
+    return occupancy_costs[data];
   } else {
-    // Linear conversion from OccupancyGrid data range [OCC_GRID_FREE..OCC_GRID_OCCUPIED]
-    // to costmap data range [FREE_SPACE..LETHAL_OBSTACLE]
-    return std::round(
-      static_cast<double>(data) * (LETHAL_OBSTACLE - FREE_SPACE) /
-      (nav2_util::OCC_GRID_OCCUPIED - nav2_util::OCC_GRID_FREE));
+    return occupancyToCost(data);
   }
 }
 
