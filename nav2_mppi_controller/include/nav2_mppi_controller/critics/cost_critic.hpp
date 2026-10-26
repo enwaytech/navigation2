@@ -15,8 +15,10 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__COST_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__COST_CRITIC_HPP_
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -76,6 +78,12 @@ protected:
     if (consider_footprint_ &&
       (cost >= possible_collision_cost_ || possible_collision_cost_ < 1.0f))
     {
+      // The footprint cost can only be LETHAL_OBSTACLE or NO_INFORMATION if such a cell lies in the bounding box
+      // of the footprint vertex cells. Otherwise it is at most INSCRIBED_INFLATED_OBSTACLE, which is no collision
+      // when the footprint is considered, so the expensive footprint check can be skipped.
+      if (footprintBoxFree(x, y, theta, footprint)) {
+        return false;
+      }
       score_cost = static_cast<float>(collision_checker_.footprintCostAtPose(
           static_cast<double>(x), static_cast<double>(y), static_cast<double>(theta),
           footprint));
@@ -135,6 +143,39 @@ protected:
   }
 
   /**
+    * @brief Count the cells with cost LETHAL_OBSTACLE or NO_INFORMATION as summed area table, for
+    * footprintBoxFree.
+    * @param costmap Costmap of the current cycle
+    */
+  void updateBlockingCellTable(const nav2_costmap_2d::Costmap2D & costmap);
+
+  /**
+    * @brief True if no cell with cost LETHAL_OBSTACLE or NO_INFORMATION lies in the bounding box of the
+    * footprint vertex cells at the pose, i.e. the footprint check cannot report a collision.
+    */
+  inline bool footprintBoxFree(
+    float x, float y, float theta, const nav2_costmap_2d::Footprint & footprint)
+  {
+    if (footprint.size() < 2) {
+      return false;
+    }
+    unsigned int min_mx = 0, min_my = 0, max_mx = 0, max_my = 0;
+    if (!collision_checker_.footprintCellBoundsAtPose(
+        static_cast<double>(x), static_cast<double>(y), static_cast<double>(theta),
+        footprint, min_mx, min_my, max_mx, max_my))
+    {
+      return false;
+    }
+    const unsigned int width = size_x_ + 1;
+    const uint32_t blocking_cells =
+      blocking_cell_table_[(max_my + 1) * width + max_mx + 1] -
+      blocking_cell_table_[min_my * width + max_mx + 1] -
+      blocking_cell_table_[(max_my + 1) * width + min_mx] +
+      blocking_cell_table_[min_my * width + min_mx];
+    return blocking_cells == 0;
+  }
+
+  /**
     * @brief A local implementation of getIndex
     * @param mx unsigned int map X coord
     * @param my unsigned into map Y coord
@@ -167,6 +208,9 @@ protected:
 
   int num_threads_{-1};
   unsigned int power_{0};
+
+  // Summed area table of blocking cells, (size_x_ + 1) x (size_y_ + 1)
+  std::vector<uint32_t> blocking_cell_table_;
 };
 
 }  // namespace mppi::critics
