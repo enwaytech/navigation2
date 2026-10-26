@@ -156,6 +156,20 @@ int CostCritic::getOptimalThreadCount()
 #endif
 }
 
+void CostCritic::updateBlockingCellTable(const nav2_costmap_2d::Costmap2D & costmap)
+{
+  const unsigned char * const char_map = costmap.getCharMap();
+  const unsigned int width = size_x_ + 1;
+  blocking_cell_table_.assign(static_cast<size_t>(width) * (size_y_ + 1), 0u);
+  for (unsigned int my = 0; my < size_y_; ++my) {
+    uint32_t row_count = 0;
+    for (unsigned int mx = 0; mx < size_x_; ++mx) {
+      row_count += char_map[my * size_x_ + mx] >= nav2_costmap_2d::LETHAL_OBSTACLE ? 1u : 0u;
+      blocking_cell_table_[(my + 1) * width + mx + 1] = blocking_cell_table_[my * width + mx + 1] + row_count;
+    }
+  }
+}
+
 void CostCritic::score(CriticData & data)
 {
   if (!enabled_) {
@@ -176,6 +190,7 @@ void CostCritic::score(CriticData & data)
     // footprint may have changed since initialization if user has dynamic footprints
     possible_collision_cost_ = findCircumscribedCost(costmap_ros_);
     footprint = costmap_ros_->getRobotFootprint();
+    updateBlockingCellTable(*costmap);
   }
 
   // If near the goal, don't apply the preferential term since the goal is near obstacles
@@ -217,7 +232,8 @@ void CostCritic::score(CriticData & data)
   for (int i = 0; i < strided_traj_rows; ++i) {
     bool trajectory_collide = false;
     float pose_cost = 0.0f;
-    float & traj_cost = repulsive_cost(i);
+    // Accumulate locally; writing to the shared array on every point causes false sharing between threads.
+    float traj_cost = repulsive_cost(i);
 
     // iterate over the trajectory backwards, as collisions are more likely towards the end of
     // the trajectory
@@ -254,6 +270,7 @@ void CostCritic::score(CriticData & data)
       }
     }
 
+    repulsive_cost(i) = traj_cost;
     all_trajectories_collide &= trajectory_collide;
   }
 

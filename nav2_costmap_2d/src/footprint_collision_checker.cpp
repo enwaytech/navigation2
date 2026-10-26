@@ -90,8 +90,14 @@ double FootprintCollisionChecker<CostmapT>::lineCost(int x0, int x1, int y0, int
   double line_cost = 0.0;
   double point_cost = -1.0;
 
+  // Read the cells directly; same indexing as Costmap2D::getCost, without a call per cell.
+  const unsigned char * const char_map = costmap_->getCharMap();
+  const unsigned int size_x = costmap_->getSizeInCellsX();
+
   for (nav2_util::LineIterator line(x0, y0, x1, y1); line.isValid(); line.advance()) {
-    point_cost = pointCost(line.getX(), line.getY());   // Score the current point
+    // Score the current point
+    point_cost = static_cast<double>(
+      char_map[static_cast<unsigned int>(line.getY()) * size_x + static_cast<unsigned int>(line.getX())]);
 
     // if in collision, no need to continue
     if (point_cost == static_cast<double>(LETHAL_OBSTACLE)) {
@@ -129,9 +135,50 @@ template<typename CostmapT>
 double FootprintCollisionChecker<CostmapT>::footprintCostAtPose(
   double x, double y, double theta, const Footprint & footprint)
 {
+  // Reused per thread to avoid an allocation per check; callers may check from several threads.
+  thread_local Footprint oriented_footprint;
+  orientFootprint(x, y, theta, footprint, oriented_footprint);
+
+  return footprintCost(oriented_footprint);
+}
+
+template<typename CostmapT>
+bool FootprintCollisionChecker<CostmapT>::footprintCellBoundsAtPose(
+  double x, double y, double theta, const Footprint & footprint,
+  unsigned int & min_mx, unsigned int & min_my, unsigned int & max_mx, unsigned int & max_my)
+{
+  if (footprint.empty()) {
+    return false;
+  }
+
+  thread_local Footprint oriented_footprint;
+  orientFootprint(x, y, theta, footprint, oriented_footprint);
+
+  for (unsigned int i = 0; i < oriented_footprint.size(); ++i) {
+    unsigned int mx = 0, my = 0;
+    if (!worldToMap(oriented_footprint[i].x, oriented_footprint[i].y, mx, my)) {
+      return false;
+    }
+    if (i == 0) {
+      min_mx = max_mx = mx;
+      min_my = max_my = my;
+    } else {
+      min_mx = std::min(min_mx, mx);
+      max_mx = std::max(max_mx, mx);
+      min_my = std::min(min_my, my);
+      max_my = std::max(max_my, my);
+    }
+  }
+  return true;
+}
+
+template<typename CostmapT>
+void FootprintCollisionChecker<CostmapT>::orientFootprint(
+  double x, double y, double theta, const Footprint & footprint, Footprint & oriented_footprint)
+{
   double cos_th = cos(theta);
   double sin_th = sin(theta);
-  Footprint oriented_footprint;
+  oriented_footprint.clear();
   oriented_footprint.reserve(footprint.size());
   geometry_msgs::msg::Point new_pt;
   for (unsigned int i = 0; i < footprint.size(); ++i) {
@@ -139,8 +186,6 @@ double FootprintCollisionChecker<CostmapT>::footprintCostAtPose(
     new_pt.y = y + (footprint[i].x * sin_th + footprint[i].y * cos_th);
     oriented_footprint.push_back(new_pt);
   }
-
-  return footprintCost(oriented_footprint);
 }
 
 // declare our valid template parameters

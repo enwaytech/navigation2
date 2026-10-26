@@ -57,6 +57,14 @@ public:
    */
   double footprintCostAtPose(double x, double y, double theta, const Footprint & footprint);
   /**
+   * @brief Find the bounding box of the map cells of the footprint vertices at a pose, oriented exactly as in
+   * footprintCostAtPose. Every cell footprintCostAtPose checks lies inside this box.
+   * @return false if the footprint is empty or a vertex is outside the costmap
+   */
+  bool footprintCellBoundsAtPose(
+    double x, double y, double theta, const Footprint & footprint,
+    unsigned int & min_mx, unsigned int & min_my, unsigned int & max_mx, unsigned int & max_my);
+  /**
    * @brief Get the cost for a line segment
    */
   double lineCost(int x0, int x1, int y0, int y1) const;
@@ -81,6 +89,12 @@ public:
   }
 
 protected:
+  /**
+   * @brief Rotate the footprint by theta and translate it to (x, y)
+   */
+  static void orientFootprint(
+    double x, double y, double theta, const Footprint & footprint, Footprint & oriented_footprint);
+
   CostmapT costmap_;
 };
 
