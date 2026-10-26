@@ -97,7 +97,8 @@ double FootprintCollisionChecker<CostmapT>::lineCost(int x0, int x1, int y0, int
   for (nav2_util::LineIterator line(x0, y0, x1, y1); line.isValid(); line.advance()) {
     // Score the current point
     point_cost = static_cast<double>(
-      char_map[static_cast<unsigned int>(line.getY()) * size_x + static_cast<unsigned int>(line.getX())]);
+      char_map[static_cast<unsigned int>(line.getY()) * size_x +
+      static_cast<unsigned int>(line.getX())]);
 
     // if in collision, no need to continue
     if (point_cost == static_cast<double>(LETHAL_OBSTACLE)) {
