@@ -191,10 +191,11 @@ protected:
   void computeCaches();
 
   /**
-   * @brief Determine optimal thread count based on system resources
+   * @brief Determine optimal thread count based on system resources and amount of work
+   * @param num_cells Number of cells processed by the parallel loops
    * @return Optimal number of OpenMP threads to use
    */
-  int getOptimalThreadCount();
+  int getOptimalThreadCount(int num_cells);
 
   /**
    * @brief Validate incoming parameter updates before applying them.
@@ -219,6 +220,8 @@ protected:
   bool inflate_unknown_, inflate_around_unknown_;
   unsigned int cell_inflation_radius_;
   int num_threads_;  // Number of OpenMP threads (-1 = auto)
+  // Cells per thread in auto mode: below this, waking more threads costs more CPU than it saves
+  static constexpr int CELLS_PER_THREAD = 250000;
   double resolution_;
 
   // Cost LUT precision: 100 samples per cell provides smooth gradients
@@ -232,6 +235,8 @@ protected:
   // Dynamic parameters handler
   rclcpp::node_interfaces::PostSetParametersCallbackHandle::SharedPtr post_set_params_handler_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr on_set_params_handler_;
+  // Distance map of the last update, kept to reuse its memory
+  MatrixXfRM distance_map_;
 };
 
 }  // namespace nav2_costmap_2d

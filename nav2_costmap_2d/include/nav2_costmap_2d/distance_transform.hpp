@@ -15,6 +15,7 @@
 #ifndef NAV2_COSTMAP_2D__DISTANCE_TRANSFORM_HPP_
 #define NAV2_COSTMAP_2D__DISTANCE_TRANSFORM_HPP_
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 #ifdef _OPENMP
@@ -102,6 +103,10 @@ public:
     }
   }
 
+  /// Up to this height the 1D transform of a binary column is exactly the squared distance to the
+  /// nearest obstacle in the column (its parabola intersections are exact in float).
+  static constexpr int MAX_BINARY_COLUMN_PASS_HEIGHT = 4096;
+
   /**
    * @brief Perform 2D Euclidean distance transform using separable passes.
    *
@@ -112,60 +117,109 @@ public:
    * The algorithm is parallelized using OpenMP when available for improved performance
    * on multi-core systems.
    *
-   * @param img Input/output matrix (modified in place). Input values should be 0 for
+   * @param img Input/output matrix (modified in place). Input values must be 0 for
    *            obstacles and DT_INF for free space. Output will contain Euclidean distances.
    * @param height Number of rows in the matrix
    * @param width Number of columns in the matrix
+   * @param num_threads Number of OpenMP threads (<= 0: OpenMP default)
    */
-  static void distanceTransform2D(MatrixXfRM & img, int height, int width)
+  static void distanceTransform2D(MatrixXfRM & img, int height, int width, int num_threads = 0)
   {
-    // Column pass (parallelizable)
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 16)
+    if (num_threads <= 0) {
+      num_threads = omp_get_max_threads();
+    }
+#else
+    (void)num_threads;
 #endif
-    for (int x = 0; x < width; x++) {
-      // Thread-local buffers
-      std::vector<float> f(height);
-      std::vector<float> d(height);
-      std::vector<int> v(height);
-      std::vector<float> z(height + 1);
 
-      // Extract column
-      for (int y = 0; y < height; y++) {
-        f[y] = img(y, x);
+    // Column pass
+    if (height <= MAX_BINARY_COLUMN_PASS_HEIGHT) {
+      // For binary input, the 1D transform of a column is the squared distance to the nearest
+      // obstacle in it. Compute it with a downward and an upward sweep over blocks of columns,
+      // which reads the row-major matrix contiguously.
+      constexpr int block = 64;
+      const int num_blocks = (width + block - 1) / block;
+#ifdef _OPENMP
+      #pragma omp parallel for num_threads(num_threads) schedule(static)
+#endif
+      for (int b = 0; b < num_blocks; b++) {
+        const int x0 = b * block;
+        const int n = std::min(block, width - x0);
+        int nearest[block];  // Row of the nearest obstacle seen so far, -1 if none
+
+        // Downward sweep: distance to the nearest obstacle at or above each cell
+        std::fill(nearest, nearest + n, -1);
+        for (int y = 0; y < height; y++) {
+          float * row = &img(y, x0);
+          for (int i = 0; i < n; i++) {
+            if (row[i] == 0.0f) {
+              nearest[i] = y;
+            }
+            row[i] = nearest[i] < 0 ? DT_INF : static_cast<float>(y - nearest[i]);
+          }
+        }
+
+        // Upward sweep: take the nearest obstacle at or below into account and square
+        std::fill(nearest, nearest + n, -1);
+        for (int y = height - 1; y >= 0; y--) {
+          float * row = &img(y, x0);
+          for (int i = 0; i < n; i++) {
+            if (row[i] == 0.0f) {
+              nearest[i] = y;
+            }
+            const float dist =
+              nearest[i] < 0 ? row[i] : std::min(row[i], static_cast<float>(nearest[i] - y));
+            row[i] = dist == DT_INF ? DT_INF : dist * dist;
+          }
+        }
       }
+    } else {
+#ifdef _OPENMP
+      #pragma omp parallel num_threads(num_threads)
+#endif
+      {
+        // Thread-local buffers
+        std::vector<float> f(height);
+        std::vector<float> d(height);
+        std::vector<int> v(height);
+        std::vector<float> z(height + 1);
+#ifdef _OPENMP
+        #pragma omp for schedule(dynamic, 16)
+#endif
+        for (int x = 0; x < width; x++) {
+          // Extract column
+          for (int y = 0; y < height; y++) {
+            f[y] = img(y, x);
+          }
 
-      // 1D transform
-      distanceTransform1D(f.data(), d.data(), height, v.data(), z.data());
+          // 1D transform
+          distanceTransform1D(f.data(), d.data(), height, v.data(), z.data());
 
-      // Write back
-      for (int y = 0; y < height; y++) {
-        img(y, x) = d[y];
+          // Write back
+          for (int y = 0; y < height; y++) {
+            img(y, x) = d[y];
+          }
+        }
       }
     }
 
-    // Row pass (parallelizable)
+    // Row pass (rows are contiguous in row-major order)
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 16)
+    #pragma omp parallel num_threads(num_threads)
 #endif
-    for (int y = 0; y < height; y++) {
+    {
       // Thread-local buffers
-      std::vector<float> f(width);
       std::vector<float> d(width);
       std::vector<int> v(width);
       std::vector<float> z(width + 1);
-
-      // Extract row (already contiguous in row-major)
-      for (int x = 0; x < width; x++) {
-        f[x] = img(y, x);
-      }
-
-      // 1D transform
-      distanceTransform1D(f.data(), d.data(), width, v.data(), z.data());
-
-      // Write back
-      for (int x = 0; x < width; x++) {
-        img(y, x) = d[x];
+#ifdef _OPENMP
+      #pragma omp for schedule(dynamic, 16)
+#endif
+      for (int y = 0; y < height; y++) {
+        float * row = &img(y, 0);
+        distanceTransform1D(row, d.data(), width, v.data(), z.data());
+        std::copy(d.begin(), d.end(), row);
       }
     }
 

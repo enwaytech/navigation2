@@ -157,7 +157,7 @@ InflationLayer::updateBounds(
 }
 
 int
-InflationLayer::getOptimalThreadCount()
+InflationLayer::getOptimalThreadCount(int num_cells)
 {
 #ifdef _OPENMP
   // If num_threads parameter is explicitly set (> 0), use it
@@ -169,19 +169,21 @@ InflationLayer::getOptimalThreadCount()
     return num_threads_;
   }
 
-  // Otherwise use auto-detection: half the available cores for memory-bound algorithms
+  // Otherwise use auto-detection: one thread per CELLS_PER_THREAD cells, at most half the
+  // available cores for memory-bound algorithms
   // Balances performance with memory bandwidth and safety on constrained systems
   // Respects OMP_NUM_THREADS environment variable
   int cpu_cores = omp_get_max_threads();
-  int optimal = std::max(1, cpu_cores / 2);
+  int max_threads = std::max(1, cpu_cores / 2);
 
   RCLCPP_INFO_ONCE(
     logger_,
-    "OpenMP: %d cores available, using %d threads (auto)",
-    cpu_cores, optimal);
+    "OpenMP: %d cores available, using up to %d threads, one per %d cells (auto)",
+    cpu_cores, max_threads, CELLS_PER_THREAD);
 
-  return optimal;
+  return std::clamp(num_cells / CELLS_PER_THREAD, 1, max_threads);
 #else
+  (void)num_cells;
   return 1;
 #endif
 }
@@ -226,7 +228,7 @@ InflationLayer::applyInflation(
   const bool inflate_unk = inflate_unknown_;
 
 #ifdef _OPENMP
-  const int num_threads = getOptimalThreadCount();
+  const int num_threads = getOptimalThreadCount((max_i - min_i) * (max_j - min_j));
   #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 16)
 #endif
   for (int j = min_j; j < max_j; ++j) {
@@ -288,11 +290,12 @@ InflationLayer::updateCosts(
   const int roi_height = roi_max_j - roi_min_j;
 
   // Create distance map: obstacles = 0, free space = INF
-  MatrixXfRM distance_map(roi_height, roi_width);
+  MatrixXfRM & distance_map = distance_map_;
+  distance_map.resize(roi_height, roi_width);
+  const int num_threads = getOptimalThreadCount(roi_width * roi_height);
 
   // Initialize mask (parallelized)
 #ifdef _OPENMP
-  const int num_threads = getOptimalThreadCount();
   #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 16)
 #endif
   for (int y = 0; y < roi_height; y++) {
@@ -314,7 +317,7 @@ InflationLayer::updateCosts(
   }
 
   // Perform Felzenszwalb-Huttenlocher distance transform
-  DistanceTransform::distanceTransform2D(distance_map, roi_height, roi_width);
+  DistanceTransform::distanceTransform2D(distance_map, roi_height, roi_width, num_threads);
 
   // Apply inflation costs
   applyInflation(
