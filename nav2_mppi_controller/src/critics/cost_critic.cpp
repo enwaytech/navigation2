@@ -165,7 +165,8 @@ void CostCritic::updateBlockingCellTable(const nav2_costmap_2d::Costmap2D & cost
     uint32_t row_count = 0;
     for (unsigned int mx = 0; mx < size_x_; ++mx) {
       row_count += char_map[my * size_x_ + mx] >= nav2_costmap_2d::LETHAL_OBSTACLE ? 1u : 0u;
-      blocking_cell_table_[(my + 1) * width + mx + 1] = blocking_cell_table_[my * width + mx + 1] + row_count;
+      blocking_cell_table_[(my + 1) * width + mx + 1] = blocking_cell_table_[my * width + mx + 1] +
+        row_count;
     }
   }
 }
