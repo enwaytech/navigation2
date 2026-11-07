@@ -25,14 +25,31 @@ namespace
 {
 
 /**
- * @brief Next value of std::minstd_rand0: value * 16807 mod (2^31 - 1). The modulo uses
- * 2^31 = 1 (mod 2^31 - 1) instead of a division.
+ * @brief value * multiplier mod (2^31 - 1) for value < 2^31 and multiplier < 2^31 - 1. The modulo
+ * uses 2^31 = 1 (mod 2^31 - 1) instead of a division.
+ */
+template<uint64_t multiplier>
+inline uint64_t mulModMersenne31(uint64_t value)
+{
+  const uint64_t product = value * multiplier;
+  const uint64_t folded = (product & 0x7fffffffu) + (product >> 31);
+  return folded >= 0x7fffffffu ? folded - 0x7fffffffu : folded;
+}
+
+/**
+ * @brief Next value of std::minstd_rand0: value * 16807 mod (2^31 - 1)
  */
 inline uint64_t minstdRand0Next(uint64_t value)
 {
-  const uint64_t product = value * 16807u;
-  const uint64_t folded = (product & 0x7fffffffu) + (product >> 31);
-  return folded >= 0x7fffffffu ? folded - 0x7fffffffu : folded;
+  return mulModMersenne31<16807u>(value);
+}
+
+/**
+ * @brief Value after the next one of std::minstd_rand0: value * 16807^2 mod (2^31 - 1)
+ */
+inline uint64_t minstdRand0NextNext(uint64_t value)
+{
+  return mulModMersenne31<282475249u>(value);
 }
 
 /**
@@ -162,9 +179,11 @@ void NoiseGenerator::sampleNormal(Eigen::ArrayXXf & noises, NormalDistribution &
   while (i < size) {
     float x, y, r2;
     do {
-      state = minstdRand0Next(state);
-      x = 2.0f * canonicalFloat(state) - 1.0f;
-      state = minstdRand0Next(state);
+      // Both values from the current state, so that the two generator steps do not wait on
+      // each other
+      const uint64_t state_x = minstdRand0Next(state);
+      state = minstdRand0NextNext(state);
+      x = 2.0f * canonicalFloat(state_x) - 1.0f;
       y = 2.0f * canonicalFloat(state) - 1.0f;
       // As the compiled libstdc++ code: x * x rounded, y * y fused
       r2 = std::fma(y, y, x * x);
