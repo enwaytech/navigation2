@@ -214,7 +214,22 @@ protected:
     const int row_inc = y_inc * static_cast<int>(size_x_);
     const int major_index_inc = x_major ? x_inc : row_inc;
     const int minor_index_inc = x_major ? row_inc : x_inc;
-    auto minorSteps = [&](int k) {return den > 0 ? (den / 2 + k * numadd) / den : 0;};
+    // (den / 2 + k * numadd) / den without an integer division: the float quotient of these small
+    // integers is off by at most one
+    const float inv_den = den > 0 ? 1.0f / static_cast<float>(den) : 0.0f;
+    auto minorSteps = [&](int k) {
+        if (den == 0) {
+          return 0;
+        }
+        const int numerator = den / 2 + k * numadd;
+        int steps = static_cast<int>(static_cast<float>(numerator) * inv_den);
+        if (steps * den > numerator) {
+          --steps;
+        } else if ((steps + 1) * den <= numerator) {
+          ++steps;
+        }
+        return steps;
+      };
     auto cellX = [&](int k, int minor_steps) {
         return x0 + x_inc * (x_major ? k : minor_steps);
       };
@@ -235,7 +250,7 @@ protected:
       {
         continue;
       }
-      int num = den > 0 ? (den / 2 + k_begin * numadd) % den : 0;
+      int num = den / 2 + k_begin * numadd - minor_begin * den;
       int index = static_cast<int>(getIndex(cx0, cy0));
       for (int k = k_begin; ; ) {
         const unsigned char cost = costmap_char_map_[index];
