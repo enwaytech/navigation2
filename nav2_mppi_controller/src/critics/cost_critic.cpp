@@ -130,6 +130,23 @@ float CostCritic::findCircumscribedCost(
   return circumscribed_cost_;
 }
 
+void CostCritic::updateBlockingCellsTable()
+{
+  const size_t stride = size_x_ + 1;
+  blocking_cells_sat_.assign(stride * (size_y_ + 1), 0u);
+  for (unsigned int my = 0; my < size_y_; ++my) {
+    const unsigned char * costs = costmap_char_map_ + static_cast<size_t>(my) * size_x_;
+    const uint32_t * above = blocking_cells_sat_.data() + static_cast<size_t>(my) * stride;
+    uint32_t * row = blocking_cells_sat_.data() + static_cast<size_t>(my + 1) * stride;
+    uint32_t row_count = 0u;
+    for (unsigned int mx = 0; mx < size_x_; ++mx) {
+      // LETHAL_OBSTACLE or NO_INFORMATION
+      row_count += costs[mx] >= nav2_costmap_2d::LETHAL_OBSTACLE ? 1u : 0u;
+      row[mx + 1] = above[mx + 1] + row_count;
+    }
+  }
+}
+
 int CostCritic::getOptimalThreadCount()
 {
 #ifdef _OPENMP
@@ -170,12 +187,17 @@ void CostCritic::score(CriticData & data)
   resolution_ = static_cast<float>(costmap->getResolution());
   size_x_ = costmap->getSizeInCellsX();
   size_y_ = costmap->getSizeInCellsY();
+  map_origin_x_ = costmap->getOriginX();
+  map_origin_y_ = costmap->getOriginY();
+  map_resolution_ = costmap->getResolution();
+  costmap_char_map_ = costmap->getCharMap();
 
   nav2_costmap_2d::Footprint footprint;
   if (consider_footprint_) {
     // footprint may have changed since initialization if user has dynamic footprints
     possible_collision_cost_ = findCircumscribedCost(costmap_ros_);
     footprint = costmap_ros_->getRobotFootprint();
+    updateBlockingCellsTable();
   }
 
   // If near the goal, don't apply the preferential term since the goal is near obstacles
@@ -208,7 +230,7 @@ void CostCritic::score(CriticData & data)
 #ifdef _OPENMP
   #pragma omp parallel for \
   default(none) \
-  shared(repulsive_cost, costmap, near_goal, footprint, \
+  shared(repulsive_cost, near_goal, footprint, \
   strided_traj_rows, strided_traj_cols, traj_x, traj_y, traj_yaw) \
   reduction(&&:all_trajectories_collide) \
   schedule(dynamic) \
@@ -232,7 +254,7 @@ void CostCritic::score(CriticData & data)
       if (!worldToMapFloat(Tx, Ty, x_i, y_i)) {
         pose_cost = 255.0f;  // NO_INFORMATION in float
       } else {
-        pose_cost = static_cast<float>(costmap->getCost(getIndex(x_i, y_i)));
+        pose_cost = static_cast<float>(costmap_char_map_[getIndex(x_i, y_i)]);
         if (pose_cost < 1.0f) {
           continue;  // In free space
         }

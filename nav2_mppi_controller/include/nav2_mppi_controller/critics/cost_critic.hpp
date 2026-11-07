@@ -15,8 +15,13 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__COST_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__COST_CRITIC_HPP_
 
+#include <algorithm>
+#include <climits>
+#include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -24,6 +29,7 @@
 
 #include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include "nav2_costmap_2d/inflation_layer.hpp"
+#include "nav2_util/line_iterator.hpp"
 
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -72,16 +78,14 @@ protected:
     }
 
     // If consider_footprint_ check footprint score for collision
-    float score_cost = cost;
     if (consider_footprint_ &&
       (cost >= possible_collision_cost_ || possible_collision_cost_ < 1.0f))
     {
-      score_cost = static_cast<float>(collision_checker_.footprintCostAtPose(
-          static_cast<double>(x), static_cast<double>(y), static_cast<double>(theta),
-          footprint));
+      return footprintInCollision(
+        static_cast<double>(x), static_cast<double>(y), static_cast<double>(theta), footprint);
     }
 
-    switch (static_cast<unsigned char>(score_cost)) {
+    switch (static_cast<unsigned char>(cost)) {
       case (nav2_costmap_2d::LETHAL_OBSTACLE):
         return true;
       case (nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE):
@@ -92,6 +96,126 @@ protected:
 
     return false;
   }
+
+  /**
+    * @brief Whether the footprint at a pose collides, i.e. whether the footprint cost of
+    * FootprintCollisionChecker::footprintCostAtPose() is LETHAL_OBSTACLE, or NO_INFORMATION while
+    * not tracking unknown space. That cost is LETHAL_OBSTACLE if a footprint vertex is off the map.
+    * Otherwise the edges are rasterized in the order of the collision checker: the first edge with
+    * a lethal or unknown cell decides, LETHAL_OBSTACLE if it has a lethal cell, NO_INFORMATION
+    * otherwise. Edges whose bounding box holds no lethal or unknown cell (summed-area table) are
+    * skipped.
+    * @param x X of pose
+    * @param y Y of pose
+    * @param theta theta of pose
+    * @param footprint Robot footprint
+    * @return bool if in collision
+    */
+  inline bool footprintInCollision(
+    double x, double y, double theta, const nav2_costmap_2d::Footprint & footprint)
+  {
+    constexpr size_t max_vertices = 16;
+    const size_t n_vertices = footprint.size();
+    if (n_vertices < 2 || n_vertices > max_vertices) {
+      switch (static_cast<unsigned char>(static_cast<float>(
+          collision_checker_.footprintCostAtPose(x, y, theta, footprint))))
+      {
+        case (nav2_costmap_2d::LETHAL_OBSTACLE):
+          return true;
+        case (nav2_costmap_2d::NO_INFORMATION):
+          return !is_tracking_unknown_;
+      }
+      return false;
+    }
+
+    // Oriented footprint vertices in map cells, as in
+    // FootprintCollisionChecker::footprintCostAtPose()
+    const double cos_th = cos(theta);
+    const double sin_th = sin(theta);
+    int mx[max_vertices], my[max_vertices];
+    int min_x = INT_MAX, min_y = INT_MAX, max_x = 0, max_y = 0;
+    for (size_t i = 0; i < n_vertices; ++i) {
+      const double wx = x + (footprint[i].x * cos_th - footprint[i].y * sin_th);
+      const double wy = y + (footprint[i].x * sin_th + footprint[i].y * cos_th);
+      if (wx < map_origin_x_ || wy < map_origin_y_) {
+        return true;
+      }
+      const auto cell_x = static_cast<unsigned int>((wx - map_origin_x_) / map_resolution_);
+      const auto cell_y = static_cast<unsigned int>((wy - map_origin_y_) / map_resolution_);
+      if (cell_x >= size_x_ || cell_y >= size_y_) {
+        return true;
+      }
+      mx[i] = static_cast<int>(cell_x);
+      my[i] = static_cast<int>(cell_y);
+      min_x = std::min(min_x, mx[i]);
+      min_y = std::min(min_y, my[i]);
+      max_x = std::max(max_x, mx[i]);
+      max_y = std::max(max_y, my[i]);
+    }
+
+    // All edge cells lie within the bounding box of the vertex cells
+    if (blockingCellCount(min_x, min_y, max_x, max_y) == 0) {
+      return false;
+    }
+
+    // Edges i -> i + 1, closed by the edge from the first to the last vertex
+    unsigned char edge_cost = nav2_costmap_2d::FREE_SPACE;
+    for (size_t i = 0; i + 1 < n_vertices && edge_cost == nav2_costmap_2d::FREE_SPACE; ++i) {
+      edge_cost = edgeBlockingCost(mx[i], my[i], mx[i + 1], my[i + 1]);
+    }
+    if (edge_cost == nav2_costmap_2d::FREE_SPACE) {
+      edge_cost = edgeBlockingCost(mx[0], my[0], mx[n_vertices - 1], my[n_vertices - 1]);
+    }
+    switch (edge_cost) {
+      case (nav2_costmap_2d::LETHAL_OBSTACLE):
+        return true;
+      case (nav2_costmap_2d::NO_INFORMATION):
+        return !is_tracking_unknown_;
+    }
+    return false;
+  }
+
+  /**
+    * @brief Number of lethal or unknown cells in the cell rectangle [x0, x1] x [y0, y1]
+    */
+  inline uint32_t blockingCellCount(int x0, int y0, int x1, int y1) const
+  {
+    const size_t stride = size_x_ + 1;
+    const uint32_t * row0 = blocking_cells_sat_.data() + static_cast<size_t>(y0) * stride;
+    const uint32_t * row1 = blocking_cells_sat_.data() + static_cast<size_t>(y1 + 1) * stride;
+    return row1[x1 + 1] - row1[x0] - row0[x1 + 1] + row0[x0];
+  }
+
+  /**
+    * @brief Walk the cells of the line from (x0, y0) to (x1, y1), rasterized like
+    * FootprintCollisionChecker::lineCost()
+    * @return LETHAL_OBSTACLE if a cell is lethal, else NO_INFORMATION if a cell is unknown,
+    * else FREE_SPACE
+    */
+  inline unsigned char edgeBlockingCost(int x0, int y0, int x1, int y1) const
+  {
+    if (blockingCellCount(std::min(x0, x1), std::min(y0, y1), std::max(x0, x1),
+        std::max(y0, y1)) == 0)
+    {
+      return nav2_costmap_2d::FREE_SPACE;
+    }
+    unsigned char edge_cost = nav2_costmap_2d::FREE_SPACE;
+    for (nav2_util::LineIterator line(x0, y0, x1, y1); line.isValid(); line.advance()) {
+      const unsigned char cost = costmap_char_map_[getIndex(line.getX(), line.getY())];
+      if (cost == nav2_costmap_2d::LETHAL_OBSTACLE) {
+        return cost;
+      }
+      if (cost == nav2_costmap_2d::NO_INFORMATION) {
+        edge_cost = cost;
+      }
+    }
+    return edge_cost;
+  }
+
+  /**
+    * @brief Build the summed-area table of the lethal and unknown cells of the costmap
+    */
+  void updateBlockingCellsTable();
 
   /**
     * @brief Find the min cost of the inflation decay function for which the robot MAY be
@@ -161,6 +285,11 @@ protected:
 
   float origin_x_, origin_y_, resolution_;
   unsigned int size_x_, size_y_;
+  double map_origin_x_, map_origin_y_, map_resolution_;
+  const unsigned char * costmap_char_map_{nullptr};
+  // Summed-area table of the lethal and unknown cells, (size_x_ + 1) x (size_y_ + 1) with a zero
+  // first row and column
+  std::vector<uint32_t> blocking_cells_sat_;
 
   float near_goal_distance_;
   std::string inflation_layer_name_;
