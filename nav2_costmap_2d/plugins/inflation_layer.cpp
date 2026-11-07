@@ -287,34 +287,88 @@ InflationLayer::updateCosts(
   const int roi_width = roi_max_i - roi_min_i;
   const int roi_height = roi_max_j - roi_min_j;
 
-  // Create distance map: obstacles = 0, free space = INF
+  // Distance map of the ROI (Felzenszwalb-Huttenlocher distance transform with obstacles = 0 and
+  // free space = INF, see DistanceTransform::distanceTransform2D())
+  constexpr float inf = DistanceTransform::DT_INF;
   MatrixXfRM distance_map(roi_height, roi_width);
 
-  // Initialize mask (parallelized)
+  // Column pass. The 1D distance transform of a column of obstacles (0) and free cells (INF) is the
+  // squared distance to the nearest obstacle cell of the column (INF without one): computed by a
+  // forward and a backward sweep over blocks of columns, with the obstacles read from the costmap.
+  constexpr int block_width = 64;
+  const int num_blocks = (roi_width + block_width - 1) / block_width;
 #ifdef _OPENMP
-  const int num_threads = getOptimalThreadCount();
-  #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 16)
+  #pragma omp parallel for schedule(dynamic, 1)
 #endif
-  for (int y = 0; y < roi_height; y++) {
-    const int src_y = y + roi_min_j;
-    for (int x = 0; x < roi_width; x++) {
-      const int src_x = x + roi_min_i;
-      const unsigned char cell = master_array[src_y * size_x + src_x];
+  for (int block = 0; block < num_blocks; ++block) {
+    const int x_begin = block * block_width;
+    const int x_end = std::min(x_begin + block_width, roi_width);
+    // Row of the nearest obstacle cell of each column so far, -1 for none
+    int nearest[block_width];
 
-      if (inflate_around_unknown_) {
-        // Treat both LETHAL_OBSTACLE and NO_INFORMATION as obstacles
-        distance_map(y,
-            x) = (cell != LETHAL_OBSTACLE &&
-          cell != NO_INFORMATION) ? DistanceTransform::DT_INF : 0.0f;
-      } else {
-        // Only LETHAL_OBSTACLE is treated as obstacle
-        distance_map(y, x) = (cell != LETHAL_OBSTACLE) ? DistanceTransform::DT_INF : 0.0f;
+    // Distance to the nearest obstacle cell at or above
+    std::fill_n(nearest, block_width, -1);
+    for (int y = 0; y < roi_height; ++y) {
+      const unsigned char * cells = master_array + (y + roi_min_j) * size_x + roi_min_i;
+      float * row = &distance_map(y, 0);
+      for (int x = x_begin; x < x_end; ++x) {
+        const unsigned char cell = cells[x];
+        if (cell == LETHAL_OBSTACLE || (inflate_around_unknown_ && cell == NO_INFORMATION)) {
+          nearest[x - x_begin] = y;
+        }
+        row[x] = nearest[x - x_begin] < 0 ? inf : static_cast<float>(y - nearest[x - x_begin]);
+      }
+    }
+
+    // Minimum with the distance to the nearest obstacle cell below, squared
+    constexpr int no_obstacle = std::numeric_limits<int>::max();
+    std::fill_n(nearest, block_width, -1);
+    for (int y = roi_height - 1; y >= 0; --y) {
+      float * row = &distance_map(y, 0);
+      for (int x = x_begin; x < x_end; ++x) {
+        const float distance_above = row[x];
+        if (distance_above == 0.0f) {
+          nearest[x - x_begin] = y;
+        }
+        int distance = distance_above == inf ? no_obstacle : static_cast<int>(distance_above);
+        if (nearest[x - x_begin] >= 0) {
+          distance = std::min(distance, nearest[x - x_begin] - y);
+        }
+        row[x] = distance == no_obstacle ? inf : static_cast<float>(distance * distance);
       }
     }
   }
 
-  // Perform Felzenszwalb-Huttenlocher distance transform
-  DistanceTransform::distanceTransform2D(distance_map, roi_height, roi_width);
+  // Row pass, only needed for the rows of the update window, and the Euclidean distances of the
+  // update window cells. Cells beyond the inflation radius get INF, which applyInflation() skips
+  // like any distance beyond it.
+  const float cell_inflation_radius_f = static_cast<float>(cell_inflation_radius_);
+  // Largest squared distance whose square root is not beyond the inflation radius
+  float max_distance_sq = cell_inflation_radius_f * cell_inflation_radius_f;
+  while (std::sqrt(max_distance_sq) > cell_inflation_radius_f) {
+    max_distance_sq = std::nextafter(max_distance_sq, 0.0f);
+  }
+  while (std::sqrt(std::nextafter(max_distance_sq, inf)) <= cell_inflation_radius_f) {
+    max_distance_sq = std::nextafter(max_distance_sq, inf);
+  }
+#ifdef _OPENMP
+  #pragma omp parallel
+#endif
+  {
+    std::vector<float> d(roi_width);
+    std::vector<int> v(roi_width);
+    std::vector<float> z(roi_width + 1);
+#ifdef _OPENMP
+    #pragma omp for schedule(dynamic, 16)
+#endif
+    for (int j = min_j; j < max_j; ++j) {
+      float * row = &distance_map(j - roi_min_j, 0);
+      DistanceTransform::distanceTransform1D(row, d.data(), roi_width, v.data(), z.data());
+      for (int i = min_i - roi_min_i; i < max_i - roi_min_i; ++i) {
+        row[i] = d[i] > max_distance_sq ? inf : std::sqrt(d[i]);
+      }
+    }
+  }
 
   // Apply inflation costs
   applyInflation(
