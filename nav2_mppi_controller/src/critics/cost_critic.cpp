@@ -240,7 +240,9 @@ void CostCritic::score(CriticData & data)
   for (int i = 0; i < strided_traj_rows; ++i) {
     bool trajectory_collide = false;
     float pose_cost = 0.0f;
-    float & traj_cost = repulsive_cost(i);
+    // Accumulated locally: the threads score neighboring trajectories, writing to the shared
+    // repulsive_cost array for every point would make them contend for its cache lines
+    float traj_cost = 0.0f;
 
     // iterate over the trajectory backwards, as collisions are more likely towards the end of
     // the trajectory
@@ -277,6 +279,7 @@ void CostCritic::score(CriticData & data)
       }
     }
 
+    repulsive_cost(i) = traj_cost;
     all_trajectories_collide &= trajectory_collide;
   }
 
