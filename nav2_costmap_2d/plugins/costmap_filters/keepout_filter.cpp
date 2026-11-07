@@ -40,6 +40,9 @@
 #include <string>
 #include <memory>
 #include <algorithm>
+#include <array>
+#include <limits>
+#include <vector>
 #include "tf2/convert.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -347,48 +350,112 @@ void KeepoutFilter::process(
   const unsigned int mg_max_x_u = static_cast<unsigned int>(mg_max_x);
   const unsigned int mg_max_y_u = static_cast<unsigned int>(mg_max_y);
 
-  unsigned int i, j;  // master_grid iterators
-  unsigned int index;  // corresponding index of master_grid
+  // Mask cost (getMaskCost()) of every OccupancyGrid value
+  static const std::array<unsigned char, 256> mask_costs = [this]() {
+      auto values = std::make_shared<nav_msgs::msg::OccupancyGrid>();
+      values->info.width = 256;
+      values->info.height = 1;
+      values->data.resize(256);
+      std::array<unsigned char, 256> costs;
+      for (unsigned int value = 0; value < 256; ++value) {
+        values->data[value] = static_cast<int8_t>(value);
+        costs[value] = getMaskCost(values, value, 0);
+      }
+      return costs;
+    }();
+
+  const nav_msgs::msg::OccupancyGrid & mask = *filter_mask_;
+  const double mask_origin_x = mask.info.origin.position.x;
+  const double mask_origin_y = mask.info.origin.position.y;
+  const double mask_resolution = mask.info.resolution;
+  const unsigned int mask_size_x = mask.info.width;
+  const unsigned int mask_size_y = mask.info.height;
+  const int8_t * mask_data = mask.data.data();
+  const bool transform_needed = mask_frame != global_frame_;
+
+  // World coordinates of the window columns and rows in global_frame_
+  const unsigned int columns = mg_max_x_u > mg_min_x_u ? mg_max_x_u - mg_min_x_u : 0;
+  const unsigned int rows = mg_max_y_u > mg_min_y_u ? mg_max_y_u - mg_min_y_u : 0;
+  std::vector<double> gl_wxs(columns), gl_wys(rows);
   double gl_wx, gl_wy;  // world coordinates in a global_frame_
-  double msk_wx, msk_wy;  // world coordinates in a mask_frame
-  unsigned int mx, my;  // filter_mask_ coordinates
-  unsigned char data, old_data;  // master_grid element data
+  for (unsigned int c = 0; c < columns; ++c) {
+    master_grid.mapToWorld(mg_min_x_u + c, mg_min_y_u, gl_wx, gl_wy);
+    gl_wxs[c] = gl_wx;
+  }
+  for (unsigned int r = 0; r < rows; ++r) {
+    master_grid.mapToWorld(mg_min_x_u, mg_min_y_u + r, gl_wx, gl_wy);
+    gl_wys[r] = gl_wy;
+  }
+
+  unsigned char * master_array = master_grid.getCharMap();
+  const unsigned int size_x = master_grid.getSizeInCellsX();
+  // Update of a master_grid cell from the filter_mask_ cell (mx, my)
+  auto updateCell = [&](unsigned int index, unsigned int mx, unsigned int my) {
+      const unsigned char data = mask_costs[static_cast<uint8_t>(mask_data[my * mask_size_x + mx])];
+      // Update if mask_ data is valid and greater than existing master_grid's one
+      if (data == NO_INFORMATION) {
+        return;
+      }
+      const unsigned char old_data = master_array[index];
+      if (data > old_data || old_data == NO_INFORMATION) {
+        if (override_lethal_cost_ && is_pose_lethal_) {
+          master_array[index] = lethal_override_cost_;
+        } else {
+          master_array[index] = data;
+        }
+      }
+    };
 
   // Main master_grid updating loop
   // Iterate in costmap window by master_grid indexes
-  unsigned char * master_array = master_grid.getCharMap();
-  for (i = mg_min_x_u; i < mg_max_x_u; i++) {
-    for (j = mg_min_y_u; j < mg_max_y_u; j++) {
-      index = master_grid.getIndex(i, j);
-      old_data = master_array[index];
-      // Calculating corresponding to (i, j) point at filter_mask_:
-      // Get world coordinates in global_frame_
-      master_grid.mapToWorld(i, j, gl_wx, gl_wy);
-      if (mask_frame != global_frame_) {
+  if (transform_needed) {
+    for (unsigned int r = 0; r < rows; ++r) {
+      const unsigned int row_index = (mg_min_y_u + r) * size_x + mg_min_x_u;
+      for (unsigned int c = 0; c < columns; ++c) {
         // Transform (i, j) point from global_frame_ to mask_frame
-        tf2::Vector3 point(gl_wx, gl_wy, 0);
+        tf2::Vector3 point(gl_wxs[c], gl_wys[r], 0);
         point = tf2_transform * point;
-        msk_wx = point.x();
-        msk_wy = point.y();
-      } else {
-        // In this case master_grid and filter-mask are in the same frame
-        msk_wx = gl_wx;
-        msk_wy = gl_wy;
-      }
-      // Get mask coordinates corresponding to (i, j) point at filter_mask_
-      if (nav2_util::worldToMap(filter_mask_, msk_wx, msk_wy, mx, my)) {
-        data = getMaskCost(filter_mask_, mx, my);
-        // Update if mask_ data is valid and greater than existing master_grid's one
-        if (data == NO_INFORMATION) {
+        const double msk_wx = point.x();
+        const double msk_wy = point.y();
+        // Get mask coordinates corresponding to (i, j) point at filter_mask_
+        // (nav2_util::worldToMap())
+        if (msk_wx < mask_origin_x || msk_wy < mask_origin_y) {
           continue;
         }
-
-        if (data > old_data || old_data == NO_INFORMATION) {
-          if (override_lethal_cost_ && is_pose_lethal_) {
-            master_array[index] = lethal_override_cost_;
-          } else {
-            master_array[index] = data;
-          }
+        const auto mx = static_cast<unsigned int>((msk_wx - mask_origin_x) / mask_resolution);
+        const auto my = static_cast<unsigned int>((msk_wy - mask_origin_y) / mask_resolution);
+        if (mx >= mask_size_x || my >= mask_size_y) {
+          continue;
+        }
+        updateCell(row_index + c, mx, my);
+      }
+    }
+  } else {
+    // In this case master_grid and filter-mask are in the same frame: the mask column only depends
+    // on the master_grid column and the mask row only on the master_grid row
+    // (nav2_util::worldToMap())
+    constexpr unsigned int outside = std::numeric_limits<unsigned int>::max();
+    std::vector<unsigned int> mxs(columns, outside), mys(rows, outside);
+    for (unsigned int c = 0; c < columns; ++c) {
+      if (!(gl_wxs[c] < mask_origin_x)) {
+        const auto mx = static_cast<unsigned int>((gl_wxs[c] - mask_origin_x) / mask_resolution);
+        mxs[c] = mx < mask_size_x ? mx : outside;
+      }
+    }
+    for (unsigned int r = 0; r < rows; ++r) {
+      if (!(gl_wys[r] < mask_origin_y)) {
+        const auto my = static_cast<unsigned int>((gl_wys[r] - mask_origin_y) / mask_resolution);
+        mys[r] = my < mask_size_y ? my : outside;
+      }
+    }
+    for (unsigned int r = 0; r < rows; ++r) {
+      if (mys[r] == outside) {
+        continue;
+      }
+      const unsigned int row_index = (mg_min_y_u + r) * size_x + mg_min_x_u;
+      for (unsigned int c = 0; c < columns; ++c) {
+        if (mxs[c] != outside) {
+          updateCell(row_index + c, mxs[c], mys[r]);
         }
       }
     }
