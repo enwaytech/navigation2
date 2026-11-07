@@ -111,21 +111,23 @@ public:
     float max_delta_wz = model_dt_ * control_constraints_.az_max;
 
     unsigned int n_cols = state.vx.cols();
+    const Eigen::Index n_rows = state.vx.rows();
 
     for (unsigned int i = 1; i < n_cols; i++) {
-      auto lower_bound_vx = (state.vx.col(i - 1) >
-        0).select(
-        state.vx.col(i - 1) + min_delta_vx,
-        state.vx.col(i - 1) - max_delta_vx);
-      auto upper_bound_vx = (state.vx.col(i - 1) >
-        0).select(
-        state.vx.col(i - 1) + max_delta_vx,
-        state.vx.col(i - 1) - min_delta_vx);
-
-      state.cvx.col(i - 1) = state.cvx.col(i - 1)
-        .cwiseMax(lower_bound_vx)
-        .cwiseMin(upper_bound_vx);
-      state.vx.col(i) = state.cvx.col(i - 1);
+      // Clamp the commanded vx to the acceleration bounds around the previous vx, in one pass:
+      // the cwiseMax / cwiseMin with (vx > 0).select() bounds that Eigen evaluates coefficient-wise
+      // with std::max / std::min
+      const float * vx_prev = state.vx.col(i - 1).data();
+      float * cvx = state.cvx.col(i - 1).data();
+      float * vx = state.vx.col(i).data();
+      for (Eigen::Index row = 0; row < n_rows; ++row) {
+        const float v = vx_prev[row];
+        const float lower_bound_vx = v > 0 ? v + min_delta_vx : v - max_delta_vx;
+        const float upper_bound_vx = v > 0 ? v + max_delta_vx : v - min_delta_vx;
+        const float bounded = std::min(std::max(cvx[row], lower_bound_vx), upper_bound_vx);
+        cvx[row] = bounded;
+        vx[row] = bounded;
+      }
 
       state.cwz.col(i - 1) = state.cwz.col(i - 1)
         .cwiseMax(state.wz.col(i - 1) - max_delta_wz)
