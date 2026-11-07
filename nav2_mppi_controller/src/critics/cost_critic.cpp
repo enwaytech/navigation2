@@ -190,6 +190,7 @@ void CostCritic::score(CriticData & data)
   map_origin_x_ = costmap->getOriginX();
   map_origin_y_ = costmap->getOriginY();
   map_resolution_ = costmap->getResolution();
+  map_inv_resolution_ = 1.0 / map_resolution_;
   costmap_char_map_ = costmap->getCharMap();
 
   nav2_costmap_2d::Footprint footprint;

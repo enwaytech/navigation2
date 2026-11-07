@@ -19,6 +19,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,7 +30,6 @@
 
 #include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include "nav2_costmap_2d/inflation_layer.hpp"
-#include "nav2_util/line_iterator.hpp"
 
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
@@ -140,8 +140,8 @@ protected:
       if (wx < map_origin_x_ || wy < map_origin_y_) {
         return true;
       }
-      const auto cell_x = static_cast<unsigned int>((wx - map_origin_x_) / map_resolution_);
-      const auto cell_y = static_cast<unsigned int>((wy - map_origin_y_) / map_resolution_);
+      const unsigned int cell_x = toCell(wx - map_origin_x_);
+      const unsigned int cell_y = toCell(wy - map_origin_y_);
       if (cell_x >= size_x_ || cell_y >= size_y_) {
         return true;
       }
@@ -199,17 +199,79 @@ protected:
     {
       return nav2_costmap_2d::FREE_SPACE;
     }
+
+    // nav2_util::LineIterator steps the major axis every cell and the minor axis whenever the
+    // numerator (starting at den / 2, plus numadd per cell) reaches den: after k cells the minor
+    // axis has stepped (den / 2 + k * numadd) / den times. The cells are walked in chunks, chunks
+    // whose bounding box holds no lethal or unknown cell are skipped.
+    const int delta_x = std::abs(x1 - x0);
+    const int delta_y = std::abs(y1 - y0);
+    const int x_inc = x1 >= x0 ? 1 : -1;
+    const int y_inc = y1 >= y0 ? 1 : -1;
+    const bool x_major = delta_x >= delta_y;
+    const int den = x_major ? delta_x : delta_y;
+    const int numadd = x_major ? delta_y : delta_x;
+    const int row_inc = y_inc * static_cast<int>(size_x_);
+    const int major_index_inc = x_major ? x_inc : row_inc;
+    const int minor_index_inc = x_major ? row_inc : x_inc;
+    auto minorSteps = [&](int k) {return den > 0 ? (den / 2 + k * numadd) / den : 0;};
+    auto cellX = [&](int k, int minor_steps) {
+        return x0 + x_inc * (x_major ? k : minor_steps);
+      };
+    auto cellY = [&](int k, int minor_steps) {
+        return y0 + y_inc * (x_major ? minor_steps : k);
+      };
+
+    constexpr int chunk_cells = 8;
     unsigned char edge_cost = nav2_costmap_2d::FREE_SPACE;
-    for (nav2_util::LineIterator line(x0, y0, x1, y1); line.isValid(); line.advance()) {
-      const unsigned char cost = costmap_char_map_[getIndex(line.getX(), line.getY())];
-      if (cost == nav2_costmap_2d::LETHAL_OBSTACLE) {
-        return cost;
+    for (int k_begin = 0; k_begin <= den; k_begin += chunk_cells) {
+      const int k_end = std::min(k_begin + chunk_cells - 1, den);
+      const int minor_begin = minorSteps(k_begin);
+      const int minor_end = minorSteps(k_end);
+      const int cx0 = cellX(k_begin, minor_begin), cy0 = cellY(k_begin, minor_begin);
+      const int cx1 = cellX(k_end, minor_end), cy1 = cellY(k_end, minor_end);
+      if (blockingCellCount(std::min(cx0, cx1), std::min(cy0, cy1), std::max(cx0, cx1),
+          std::max(cy0, cy1)) == 0)
+      {
+        continue;
       }
-      if (cost == nav2_costmap_2d::NO_INFORMATION) {
-        edge_cost = cost;
+      int num = den > 0 ? (den / 2 + k_begin * numadd) % den : 0;
+      int index = static_cast<int>(getIndex(cx0, cy0));
+      for (int k = k_begin; ; ) {
+        const unsigned char cost = costmap_char_map_[index];
+        if (cost == nav2_costmap_2d::LETHAL_OBSTACLE) {
+          return cost;
+        }
+        if (cost == nav2_costmap_2d::NO_INFORMATION) {
+          edge_cost = cost;
+        }
+        if (++k > k_end) {
+          break;
+        }
+        index += major_index_inc;
+        num += numadd;
+        if (num >= den) {
+          num -= den;
+          index += minor_index_inc;
+        }
       }
     }
     return edge_cost;
+  }
+
+  /**
+    * @brief static_cast<unsigned int>(offset / map_resolution_) for an offset >= 0. Multiplies with
+    * the reciprocal and only divides if the quotient is within rounding error of an integer.
+    */
+  inline unsigned int toCell(double offset) const
+  {
+    const double quotient = offset * map_inv_resolution_;
+    const double cell = std::floor(quotient);
+    // The product deviates from the rounded division by less than 4e-16 * quotient
+    if (quotient < 1e9 && quotient - cell > 1e-6 && cell + 1.0 - quotient > 1e-6) {
+      return static_cast<unsigned int>(cell);
+    }
+    return static_cast<unsigned int>(offset / map_resolution_);
   }
 
   /**
@@ -285,7 +347,7 @@ protected:
 
   float origin_x_, origin_y_, resolution_;
   unsigned int size_x_, size_y_;
-  double map_origin_x_, map_origin_y_, map_resolution_;
+  double map_origin_x_, map_origin_y_, map_resolution_, map_inv_resolution_;
   const unsigned char * costmap_char_map_{nullptr};
   // Summed-area table of the lethal and unknown cells, (size_x_ + 1) x (size_y_ + 1) with a zero
   // first row and column
