@@ -14,11 +14,40 @@
 
 #include "nav2_mppi_controller/tools/noise_generator.hpp"
 
+#include <cmath>
 #include <memory>
 #include <mutex>
 
 namespace mppi
 {
+
+namespace
+{
+
+/**
+ * @brief Next value of std::minstd_rand0: value * 16807 mod (2^31 - 1). The modulo uses
+ * 2^31 = 1 (mod 2^31 - 1) instead of a division.
+ */
+inline uint64_t minstdRand0Next(uint64_t value)
+{
+  const uint64_t product = value * 16807u;
+  const uint64_t folded = (product & 0x7fffffffu) + (product >> 31);
+  return folded >= 0x7fffffffu ? folded - 0x7fffffffu : folded;
+}
+
+/**
+ * @brief std::generate_canonical<float, 24>() of a std::minstd_rand0 value, as libstdc++ computes it
+ */
+inline float canonicalFloat(uint64_t value)
+{
+  float result = static_cast<float>(value - 1u) / 2147483648.0f;
+  if (result >= 1.0f) {
+    result = std::nextafter(1.0f, 0.0f);
+  }
+  return result;
+}
+
+}  // namespace
 
 void NoiseGenerator::initialize(
   mppi::models::OptimizerSettings & settings, bool is_holonomic,
@@ -28,9 +57,9 @@ void NoiseGenerator::initialize(
   is_holonomic_ = is_holonomic;
   active_ = true;
 
-  ndistribution_vx_ = std::normal_distribution(0.0f, settings_.sampling_std.vx);
-  ndistribution_vy_ = std::normal_distribution(0.0f, settings_.sampling_std.vy);
-  ndistribution_wz_ = std::normal_distribution(0.0f, settings_.sampling_std.wz);
+  ndistribution_vx_ = NormalDistribution{0.0f, settings_.sampling_std.vx};
+  ndistribution_vy_ = NormalDistribution{0.0f, settings_.sampling_std.vy};
+  ndistribution_wz_ = NormalDistribution{0.0f, settings_.sampling_std.wz};
 
   auto getParam = param_handler->getParamGetter(name);
   getParam(regenerate_noises_, "regenerate_noises", false);
@@ -108,14 +137,50 @@ void NoiseGenerator::noiseThread()
 void NoiseGenerator::generateNoisedControls()
 {
   auto & s = settings_;
-  noises_vx_ = Eigen::ArrayXXf::NullaryExpr(
-    s.batch_size, s.time_steps, [&]() {return ndistribution_vx_(generator_);});
-  noises_wz_ = Eigen::ArrayXXf::NullaryExpr(
-    s.batch_size, s.time_steps, [&]() {return ndistribution_wz_(generator_);});
+  noises_vx_.resize(s.batch_size, s.time_steps);
+  sampleNormal(noises_vx_, ndistribution_vx_);
+  noises_wz_.resize(s.batch_size, s.time_steps);
+  sampleNormal(noises_wz_, ndistribution_wz_);
   if (is_holonomic_) {
-    noises_vy_ = Eigen::ArrayXXf::NullaryExpr(
-      s.batch_size, s.time_steps, [&]() {return ndistribution_vy_(generator_);});
+    noises_vy_.resize(s.batch_size, s.time_steps);
+    sampleNormal(noises_vy_, ndistribution_vy_);
   }
+}
+
+void NoiseGenerator::sampleNormal(Eigen::ArrayXXf & noises, NormalDistribution & distribution)
+{
+  float * out = noises.data();
+  const Eigen::Index size = noises.size();
+  Eigen::Index i = 0;
+  if (size > 0 && distribution.saved_available) {
+    distribution.saved_available = false;
+    out[i++] = distribution.saved * distribution.stddev + distribution.mean;
+  }
+
+  // Marsaglia polar method of libstdc++'s std::normal_distribution
+  uint64_t state = generator_state_;
+  while (i < size) {
+    float x, y, r2;
+    do {
+      state = minstdRand0Next(state);
+      x = 2.0f * canonicalFloat(state) - 1.0f;
+      state = minstdRand0Next(state);
+      y = 2.0f * canonicalFloat(state) - 1.0f;
+      // As the compiled libstdc++ code: x * x rounded, y * y fused
+      r2 = std::fma(y, y, x * x);
+    } while (r2 > 1.0f || r2 == 0.0f);
+
+    const float mult = std::sqrt(-2.0f * std::log(r2) / r2);
+    out[i++] = (y * mult) * distribution.stddev + distribution.mean;
+    const float saved = x * mult;
+    if (i < size) {
+      out[i++] = saved * distribution.stddev + distribution.mean;
+    } else {
+      distribution.saved = saved;
+      distribution.saved_available = true;
+    }
+  }
+  generator_state_ = state;
 }
 
 }  // namespace mppi

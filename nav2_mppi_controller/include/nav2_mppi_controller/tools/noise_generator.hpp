@@ -22,7 +22,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <random>
+#include <cstdint>
 
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav2_mppi_controller/models/optimizer_settings.hpp"
@@ -95,14 +95,36 @@ protected:
    */
   void generateNoisedControls();
 
+  /**
+   * @brief State of a std::normal_distribution<float> drawing from generator_state_
+   */
+  struct NormalDistribution
+  {
+    float mean{0.0f};
+    float stddev{1.0f};
+    // The polar method generates two values at a time, the second one is returned next time
+    bool saved_available{false};
+    float saved{0.0f};
+  };
+
+  /**
+   * @brief Fill noises (in storage order) with samples of a normal distribution, bit-identical to
+   * calling a libstdc++ std::normal_distribution<float> with a std::default_random_engine
+   * (std::minstd_rand0) for each coefficient
+   * @param noises Array to fill
+   * @param distribution Distribution to sample
+   */
+  void sampleNormal(Eigen::ArrayXXf & noises, NormalDistribution & distribution);
+
   Eigen::ArrayXXf noises_vx_;
   Eigen::ArrayXXf noises_vy_;
   Eigen::ArrayXXf noises_wz_;
 
-  std::default_random_engine generator_;
-  std::normal_distribution<float> ndistribution_vx_;
-  std::normal_distribution<float> ndistribution_wz_;
-  std::normal_distribution<float> ndistribution_vy_;
+  // State of the std::default_random_engine (std::minstd_rand0) the noises are drawn from
+  uint64_t generator_state_{1u};
+  NormalDistribution ndistribution_vx_;
+  NormalDistribution ndistribution_wz_;
+  NormalDistribution ndistribution_vy_;
 
   mppi::models::OptimizerSettings settings_;
   bool is_holonomic_;
