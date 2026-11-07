@@ -41,6 +41,14 @@ using rcl_interfaces::msg::ParameterType;
 namespace nav2_costmap_2d
 {
 
+namespace
+{
+// Smallest region (cells) processed by OpenMP thread teams: for smaller regions, like the usual
+// update windows, waking and synchronizing the threads costs more CPU time than the parallel work
+// saves.
+constexpr long parallel_min_cells = 1000000;
+}  // namespace
+
 InflationLayer::InflationLayer()
 : inflation_radius_(0),
   inscribed_radius_(0),
@@ -227,7 +235,8 @@ InflationLayer::applyInflation(
 
 #ifdef _OPENMP
   const int num_threads = getOptimalThreadCount();
-  #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 16)
+  const bool parallel = static_cast<long>(max_i - min_i) * (max_j - min_j) >= parallel_min_cells;
+  #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 16) if(parallel)
 #endif
   for (int j = min_j; j < max_j; ++j) {
     const int row_offset = j * static_cast<int>(size_x);
@@ -298,7 +307,8 @@ InflationLayer::updateCosts(
   constexpr int block_width = 64;
   const int num_blocks = (roi_width + block_width - 1) / block_width;
 #ifdef _OPENMP
-  #pragma omp parallel for schedule(dynamic, 1)
+  const bool parallel = static_cast<long>(roi_width) * roi_height >= parallel_min_cells;
+  #pragma omp parallel for schedule(dynamic, 1) if(parallel)
 #endif
   for (int block = 0; block < num_blocks; ++block) {
     const int x_begin = block * block_width;
@@ -352,7 +362,7 @@ InflationLayer::updateCosts(
     max_distance_sq = std::nextafter(max_distance_sq, inf);
   }
 #ifdef _OPENMP
-  #pragma omp parallel
+  #pragma omp parallel if(parallel)
 #endif
   {
     std::vector<float> d(roi_width);
