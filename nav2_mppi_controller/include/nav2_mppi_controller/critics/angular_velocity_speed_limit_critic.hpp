@@ -58,6 +58,12 @@ protected:
   float max_speed_{0};
   float weight_{0};
   unsigned int power_{0};
+
+  // Buffers kept to avoid reallocation
+  Eigen::ArrayXf per_traj_;
+  Eigen::ArrayXf speed_;
+  Eigen::ArrayXf mask_;
+  Eigen::ArrayXf step_cost_;
 };
 
 }  // namespace mppi::critics

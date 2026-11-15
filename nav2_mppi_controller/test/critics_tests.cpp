@@ -21,6 +21,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
 #include "nav2_mppi_controller/motion_models.hpp"
+#include "nav2_mppi_controller/critics/angular_velocity_speed_limit_critic.hpp"
 #include "nav2_mppi_controller/critics/constraint_critic.hpp"
 #include "nav2_mppi_controller/critics/goal_angle_critic.hpp"
 #include "nav2_mppi_controller/critics/goal_critic.hpp"
@@ -1046,4 +1047,239 @@ TEST(CriticTests, ObstacleBypassCritic)
   data.furthest_reached_path_point = 25;
   critic.score(data);
   EXPECT_NEAR(costs.sum(), 0.0, 1e-6);
+}
+
+TEST(CriticTests, AngularVelocitySpeedLimitCritic)
+{
+  // Standard preamble
+  auto node = std::make_shared<nav2::LifecycleNode>("my_node");
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  std::string name = "test";
+  ParametersHandler param_handler(node, name);
+  node->declare_parameter("critic.min_angular_velocity", rclcpp::ParameterValue(0.125));
+  node->declare_parameter("critic.max_angular_velocity", rclcpp::ParameterValue(0.375));
+  node->declare_parameter("critic.min_speed", rclcpp::ParameterValue(0.25));
+  node->declare_parameter("critic.max_speed", rclcpp::ParameterValue(1.375));
+  rclcpp_lifecycle::State lstate;
+  costmap_ros->on_configure(lstate);
+
+  models::State state;
+  state.reset(1003, 57);
+  models::Trajectories generated_trajectories;
+  models::Path path;
+  geometry_msgs::msg::Pose goal;
+  Eigen::ArrayXf costs = Eigen::ArrayXf::Zero(1003);
+  float model_dt = 0.05f;
+  CriticData data =
+  {state, generated_trajectories, path, goal, costs, std::nullopt, model_dt,
+    false, nullptr, nullptr, std::nullopt, std::nullopt};
+  data.motion_model = std::make_shared<AckermannMotionModel>(&param_handler, node->get_name());
+
+  AngularVelocitySpeedLimitCritic critic;
+  critic.on_configure(node, "mppi", "critic", costmap_ros, &param_handler);
+  EXPECT_EQ(critic.getName(), "critic");
+
+  // Below min_angular_velocity there is no cost, whatever the speed
+  state.vx.setConstant(1.375f);
+  state.wz.setConstant(0.1f);
+  critic.score(data);
+  EXPECT_EQ(costs.sum(), 0.0f);
+
+  // Above max_angular_velocity speeds over min_speed are penalized:
+  // 10 weight * (1.0 - 0.25) * 0.05 dt * 57 steps = 21.375
+  state.vx.setConstant(1.0f);
+  state.wz.setConstant(-0.5f);
+  critic.score(data);
+  EXPECT_NEAR(costs(0), 21.375, 1e-3);
+  EXPECT_NEAR(costs(1002), 21.375, 1e-3);
+
+  // Random velocities: same result as the original row-wise expression. Only up to rounding
+  // here, because the compiler may contract the reference expression differently in this file.
+  std::mt19937 gen(7);
+  std::uniform_real_distribution<float> vx_dist(-0.5f, 1.5f), vy_dist(-0.3f, 0.3f),
+  wz_dist(-0.8f, 0.8f);
+  for (Eigen::Index i = 0; i < state.vx.size(); i++) {
+    state.vx(i) = vx_dist(gen);
+    state.vy(i) = vy_dist(gen);
+    state.wz(i) = wz_dist(gen);
+  }
+  state.wz(0, 3) = 0.125f;  // at min_angular_velocity
+  state.wz(1, 3) = -0.375f;  // at max_angular_velocity
+
+  const float min_wz = 0.125f, max_wz = 0.375f, min_speed = 0.25f, max_speed = 1.375f;
+  const auto wz = state.wz.abs();
+  const auto speed = (state.vx.square() + state.vy.square()).sqrt();
+  const auto wz_ratio = (wz / max_wz).min(1.0f);
+  const auto allowed_speed = (1.0f - wz_ratio) * max_speed + wz_ratio * min_speed;
+  const auto speed_violation = (speed - allowed_speed).max(0.0f);
+  const auto mask = (wz >= min_wz).cast<float>();
+  const Eigen::ArrayXf per_traj = (mask * speed_violation * model_dt).rowwise().sum().eval();
+
+  costs.setZero();
+  critic.score(data);
+  const Eigen::ArrayXf expected = (per_traj * 10.0f).eval();
+  EXPECT_GT(expected.sum(), 0.0f);
+  for (Eigen::Index i = 0; i < costs.size(); i++) {
+    EXPECT_NEAR(costs(i), expected(i), 1e-5f * expected(i) + 1e-6f) << i;
+  }
+
+  // Power
+  node->set_parameter(rclcpp::Parameter("critic.cost_power", 2));
+  critic = AngularVelocitySpeedLimitCritic();
+  critic.on_configure(node, "mppi", "critic", costmap_ros, &param_handler);
+  costs.setZero();
+  critic.score(data);
+  const Eigen::ArrayXf expected_pow = (per_traj * 10.0f).pow(2u).eval();
+  for (Eigen::Index i = 0; i < costs.size(); i++) {
+    EXPECT_NEAR(costs(i), expected_pow(i), 1e-5f * expected_pow(i) + 1e-6f) << i;
+  }
+}
+
+// The cost of PathAlignCritic, computed trajectory by trajectory through strided maps and
+// angles::shortest_angular_distance
+Eigen::ArrayXf referencePathAlignCost(
+  const CriticData & data, const std::vector<bool> & path_pts_valid, int trajectory_point_step,
+  bool use_path_orientations)
+{
+  const size_t path_segments_count = data.path.x.size() - 1;
+  std::vector<float> path_integrated_distances(path_segments_count, 0.0f);
+  std::vector<utils::Pose2D> path(path_segments_count);
+  float dx = 0.0f, dy = 0.0f;
+  for (unsigned int i = 1; i != path_segments_count; i++) {
+    auto & pose = path[i - 1];
+    pose.x = data.path.x(i - 1);
+    pose.y = data.path.y(i - 1);
+    pose.theta = data.path.yaws(i - 1);
+    dx = data.path.x(i) - pose.x;
+    dy = data.path.y(i) - pose.y;
+    path_integrated_distances[i] = path_integrated_distances[i - 1] + sqrtf(dx * dx + dy * dy);
+  }
+  auto & final_pose = path[path_segments_count - 1];
+  final_pose.x = data.path.x(path_segments_count - 1);
+  final_pose.y = data.path.y(path_segments_count - 1);
+  final_pose.theta = data.path.yaws(path_segments_count - 1);
+
+  const int rows = data.trajectories.x.rows();
+  const int cols = floor((data.trajectories.x.cols() - 1) / trajectory_point_step) + 1;
+  const int outer_stride = rows * trajectory_point_step;
+  using StridedMap = Eigen::Map<const Eigen::ArrayXXf, 0, Eigen::Stride<-1, -1>>;
+  const StridedMap T_x(
+    data.trajectories.x.data(), rows, cols, Eigen::Stride<-1, -1>(outer_stride, 1));
+  const StridedMap T_y(
+    data.trajectories.y.data(), rows, cols, Eigen::Stride<-1, -1>(outer_stride, 1));
+  const StridedMap T_yaw(
+    data.trajectories.yaws.data(), rows, cols, Eigen::Stride<-1, -1>(outer_stride, 1));
+
+  Eigen::ArrayXf cost = Eigen::ArrayXf::Zero(rows);
+  for (int t = 0; t < rows; ++t) {
+    float summed_path_dist = 0.0f, traj_integrated_distance = 0.0f;
+    unsigned int num_samples = 0u, path_pt = 0u;
+    float Tx_m1 = T_x(t, 0);
+    float Ty_m1 = T_y(t, 0);
+    for (int p = 1; p < cols; p++) {
+      const float Tx = T_x(t, p);
+      const float Ty = T_y(t, p);
+      dx = Tx - Tx_m1;
+      dy = Ty - Ty_m1;
+      Tx_m1 = Tx;
+      Ty_m1 = Ty;
+      traj_integrated_distance += sqrtf(dx * dx + dy * dy);
+      path_pt = utils::findClosestPathPt(
+        path_integrated_distances, traj_integrated_distance, path_pt);
+      if (path_pts_valid[path_pt]) {
+        const auto & pose = path[path_pt];
+        dx = pose.x - Tx;
+        dy = pose.y - Ty;
+        num_samples++;
+        if (use_path_orientations) {
+          const float dyaw = angles::shortest_angular_distance(pose.theta, T_yaw(t, p));
+          summed_path_dist += sqrtf(dx * dx + dy * dy + dyaw * dyaw);
+        } else {
+          summed_path_dist += sqrtf(dx * dx + dy * dy);
+        }
+      }
+    }
+    cost(t) = num_samples > 0u ? summed_path_dist / static_cast<float>(num_samples) : 0.0f;
+  }
+  return cost;
+}
+
+TEST(CriticTests, PathAlignCriticMatchesReference)
+{
+  // Standard preamble
+  auto node = std::make_shared<nav2::LifecycleNode>("my_node");
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  std::string name = "test";
+  ParametersHandler param_handler(node, name);
+  node->declare_parameter("critic.use_path_orientations", rclcpp::ParameterValue(true));
+  node->declare_parameter("critic.cost_weight", rclcpp::ParameterValue(14.0));
+  node->declare_parameter("critic.trajectory_point_step", rclcpp::ParameterValue(4));
+  rclcpp_lifecycle::State lstate;
+  costmap_ros->on_configure(lstate);
+
+  models::State state;
+  models::Trajectories trajectories;
+  models::Path path;
+  geometry_msgs::msg::Pose goal;
+  // Batch size not a multiple of the critic's block size
+  const int batch_size = 300;
+  Eigen::ArrayXf costs = Eigen::ArrayXf::Zero(batch_size);
+  float model_dt = 0.05f;
+  CriticData data =
+  {state, trajectories, path, goal, costs, std::nullopt, model_dt,
+    false, nullptr, nullptr, std::nullopt, std::nullopt};
+  data.motion_model = std::make_shared<DiffDriveMotionModel>();
+
+  // Curved path with 5 cm spacing, its last points invalid
+  path.reset(200);
+  float yaw = 0.3f;
+  path.yaws(0) = yaw;
+  for (Eigen::Index i = 1; i < path.x.size(); i++) {
+    yaw += 0.02f;
+    path.x(i) = path.x(i - 1) + 0.05f * std::cos(yaw);
+    path.y(i) = path.y(i - 1) + 0.05f * std::sin(yaw);
+    path.yaws(i) = yaw;
+  }
+  std::vector<bool> valid(path.x.size() - 1, true);
+  for (size_t i = 150; i < 160; i++) {
+    valid[i] = false;
+  }
+
+  // Random trajectories with headings beyond pi, so that angles get normalized
+  std::mt19937 gen(3);
+  std::uniform_real_distribution<float> speed(-0.3f, 1.4f), turn(-0.15f, 0.15f);
+  trajectories.reset(batch_size, 101);
+  for (int t = 0; t < batch_size; t++) {
+    float traj_yaw = (t % 5) * 2.5f - 5.0f;
+    const float v = speed(gen);
+    trajectories.yaws(t, 0) = traj_yaw;
+    for (Eigen::Index j = 1; j < trajectories.x.cols(); j++) {
+      traj_yaw += turn(gen);
+      trajectories.x(t, j) = trajectories.x(t, j - 1) + 0.05f * v * std::cos(traj_yaw);
+      trajectories.y(t, j) = trajectories.y(t, j - 1) + 0.05f * v * std::sin(traj_yaw);
+      trajectories.yaws(t, j) = traj_yaw;
+    }
+  }
+  state.local_path_length = 10.0f;
+
+  for (const int step : {4, 3, 1}) {
+    for (const bool use_orientations : {true, false}) {
+      node->set_parameter(rclcpp::Parameter("critic.trajectory_point_step", step));
+      node->set_parameter(rclcpp::Parameter("critic.use_path_orientations", use_orientations));
+      PathAlignCritic critic;
+      critic.on_configure(node, "mppi", "critic", costmap_ros, &param_handler);
+      data.furthest_reached_path_point = 30;
+      data.path_pts_valid = valid;
+      costs.setZero();
+      critic.score(data);
+      const Eigen::ArrayXf expected =
+        (referencePathAlignCost(data, valid, step, use_orientations) * 14.0f).eval();
+      EXPECT_GT(expected.sum(), 0.0f);
+      for (Eigen::Index i = 0; i < costs.size(); i++) {
+        EXPECT_NEAR(costs(i), expected(i), 1e-5f * expected(i) + 1e-6f) << step << " " << i;
+      }
+    }
+  }
 }
