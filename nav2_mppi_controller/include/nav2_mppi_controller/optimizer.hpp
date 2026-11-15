@@ -261,6 +261,15 @@ protected:
   void updateControlSequence();
 
   /**
+   * @brief Add the control cost of one axis to the trajectory costs
+   * @param controls Sampled controls of the axis, one row per trajectory
+   * @param sequence Current control sequence of the axis
+   * @param gamma Weight of the control cost
+   */
+  void addControlCosts(
+    const Eigen::ArrayXXf & controls, const Eigen::ArrayXf & sequence, float gamma);
+
+  /**
    * @brief Convert control sequence to a twist command
    * @param stamp Timestamp to use
    * @return TwistStamped of command to send to robot base
@@ -311,6 +320,26 @@ protected:
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
+
+  // Scratch buffers sized in reset() so that a control cycle does not allocate.
+  // Rollout: per-trajectory heading (padded to whole SIMD packets), its sin/cos and position
+  mutable Eigen::ArrayXf rollout_yaws_;
+  mutable Eigen::ArrayXf rollout_cos_;
+  mutable Eigen::ArrayXf rollout_sin_;
+  mutable Eigen::ArrayXf rollout_x_;
+  mutable Eigen::ArrayXf rollout_y_;
+  mutable Eigen::ArrayXf rollout_dx_;
+  mutable Eigen::ArrayXf rollout_dy_;
+  // Optimal trajectory integration over the time steps
+  mutable Eigen::ArrayXf optimal_cos_;
+  mutable Eigen::ArrayXf optimal_sin_;
+  mutable Eigen::ArrayXf optimal_dx_;
+  mutable Eigen::ArrayXf optimal_dy_;
+  Eigen::ArrayXXf optimal_sequence_;
+  Eigen::Array<float, Eigen::Dynamic, 3> optimal_trajectory_;
+  // Control sequence update
+  Eigen::ArrayXf control_costs_;
+  Eigen::ArrayXf softmaxes_;
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,

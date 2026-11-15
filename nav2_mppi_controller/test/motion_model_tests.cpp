@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <array>
 #include <chrono>
+#include <cmath>
+#include <cstring>
+#include <memory>
 #include <thread>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "rclcpp/rclcpp.hpp"
@@ -342,6 +347,132 @@ TEST(MotionModelTests, DelayZeroSkipsShift)
   model.predict(state);
 
   EXPECT_TRUE(state.vx.isApproxToConstant(2.0f));
+}
+
+// Reference rollout: bound column by column, then shift the velocities by the input delays
+static void referencePredict(
+  models::State & state, bool is_holo, const models::ControlConstraints & c, float dt,
+  unsigned int offset_vx, unsigned int offset_vy, unsigned int offset_wz,
+  const std::vector<float> & hist_vx, const std::vector<float> & hist_vy,
+  const std::vector<float> & hist_wz)
+{
+  const float max_delta_vx = dt * c.ax_max;
+  const float min_delta_vx = dt * c.ax_min;
+  const float max_delta_vy = dt * c.ay_max;
+  const float min_delta_vy = dt * c.ay_min;
+  const float max_delta_wz = dt * c.az_max;
+  const unsigned int n_cols = state.vx.cols();
+  for (unsigned int i = 1; i < n_cols; i++) {
+    auto lower_vx = (state.vx.col(i - 1) > 0).select(
+      state.vx.col(i - 1) + min_delta_vx, state.vx.col(i - 1) - max_delta_vx);
+    auto upper_vx = (state.vx.col(i - 1) > 0).select(
+      state.vx.col(i - 1) + max_delta_vx, state.vx.col(i - 1) - min_delta_vx);
+    state.cvx.col(i - 1) = state.cvx.col(i - 1).cwiseMax(lower_vx).cwiseMin(upper_vx);
+    state.vx.col(i) = state.cvx.col(i - 1);
+
+    state.cwz.col(i - 1) = state.cwz.col(i - 1)
+      .cwiseMax(state.wz.col(i - 1) - max_delta_wz)
+      .cwiseMin(state.wz.col(i - 1) + max_delta_wz);
+    state.wz.col(i) = state.cwz.col(i - 1);
+
+    if (is_holo) {
+      auto lower_vy = (state.vy.col(i - 1) > 0).select(
+        state.vy.col(i - 1) + min_delta_vy, state.vy.col(i - 1) - max_delta_vy);
+      auto upper_vy = (state.vy.col(i - 1) > 0).select(
+        state.vy.col(i - 1) + max_delta_vy, state.vy.col(i - 1) - min_delta_vy);
+      state.cvy.col(i - 1) = state.cvy.col(i - 1).cwiseMax(lower_vy).cwiseMin(upper_vy);
+      state.vy.col(i) = state.cvy.col(i - 1);
+    }
+  }
+
+  auto shift = [n_cols](
+    Eigen::ArrayXXf & v, unsigned int offset, const std::vector<float> & history) {
+      if (offset == 0u) {
+        return;
+      }
+      for (unsigned int k = (offset < n_cols) ? n_cols - offset : 0u; k > 0; --k) {
+        v.col(offset + k - 1) = v.col(k);
+      }
+      for (unsigned int j = 1; j < std::min(offset, n_cols); ++j) {
+        v.col(j).setConstant(history[j]);
+      }
+    };
+  shift(state.vx, offset_vx, hist_vx);
+  shift(state.wz, offset_wz, hist_wz);
+  if (is_holo) {
+    shift(state.vy, offset_vy, hist_vy);
+  }
+}
+
+static bool bitwiseEqual(const Eigen::ArrayXXf & a, const Eigen::ArrayXXf & b)
+{
+  return a.rows() == b.rows() && a.cols() == b.cols() &&
+         std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+}
+
+TEST(MotionModelTests, PredictMatchesReferenceRollout)
+{
+  // Limits small enough relative to the sampled controls that most elements are clamped
+  const models::ControlConstraints constraints{1.0f, -0.5f, 0.6f, 1.2f, 1.5f, -2.0f, -1.0f,
+    1.0f, 2.0f};
+  const float dt = 0.05f;
+  // {delay vx, delay vy, delay wz}: none, one step, several steps, beyond the horizon
+  const std::vector<std::array<float, 3>> delays = {
+    {0.0f, 0.0f, 0.0f}, {0.05f, 0.0f, 0.1f}, {0.1f, 0.15f, 0.8f}, {2.0f, 0.1f, 0.2f}};
+
+  for (const bool is_holo : {false, true}) {
+    for (const auto & delay : delays) {
+      std::unique_ptr<MotionModel> model;
+      if (is_holo) {
+        model = std::make_unique<OmniMotionModel>();
+      } else {
+        model = std::make_unique<DiffDriveMotionModel>();
+      }
+      model->initialize(constraints, dt, delay[0], delay[1], delay[2]);
+      for (int k = 0; k != 20; k++) {
+        model->pushCommandHistory(0.1f * k, -0.05f * k, 0.2f - 0.03f * k);
+      }
+
+      // Odd batch size so that rows do not fill whole SIMD packets
+      std::srand(42);
+      models::State state;
+      state.reset(37, 30);
+      state.cvx = Eigen::ArrayXXf::Random(37, 30);
+      state.cvy = Eigen::ArrayXXf::Random(37, 30);
+      state.cwz = Eigen::ArrayXXf::Random(37, 30);
+      state.vx.col(0) = Eigen::ArrayXf::Random(37);
+      state.vx(0, 0) = 0.0f;
+      state.vy.col(0) = Eigen::ArrayXf::Random(37);
+      state.wz.col(0) = Eigen::ArrayXf::Random(37);
+      models::State expected = state;
+
+      // Same rounding of the delays to steps as the model
+      auto steps = [dt](float d) {return static_cast<unsigned int>(std::floor(d / dt + 0.5));};
+      auto history = [&](float d, int axis) {
+          std::vector<float> h(steps(d));
+          for (size_t j = 0; j != h.size(); j++) {
+            // The ring buffer holds zeros before the first pushed command
+            const int k = 20 - static_cast<int>(h.size()) + static_cast<int>(j);
+            if (k >= 0) {
+              h[j] = axis == 0 ? 0.1f * k : (axis == 1 ? -0.05f * k : 0.2f - 0.03f * k);
+            }
+          }
+          return h;
+        };
+      referencePredict(
+        expected, is_holo, constraints, dt, steps(delay[0]), steps(delay[1]), steps(delay[2]),
+        history(delay[0], 0), history(delay[1], 1), history(delay[2], 2));
+
+      model->predict(state);
+
+      EXPECT_TRUE(bitwiseEqual(state.vx, expected.vx));
+      EXPECT_TRUE(bitwiseEqual(state.wz, expected.wz));
+      EXPECT_TRUE(bitwiseEqual(state.vy, expected.vy));
+      EXPECT_TRUE(bitwiseEqual(state.cvx, expected.cvx));
+      EXPECT_TRUE(bitwiseEqual(state.cwz, expected.cwz));
+      EXPECT_TRUE(bitwiseEqual(state.cvy, expected.cvy));
+    }
+  }
 }
 
 int main(int argc, char ** argv)
