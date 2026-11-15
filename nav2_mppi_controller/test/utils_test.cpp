@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstring>
+#include <limits>
 #include <thread>
 #include <random>
 
@@ -170,6 +174,81 @@ TEST(UtilsTests, AnglesTests)
   EXPECT_NEAR(posePointAngle(pose, point_x, point_y, point_yaw), M_PI, 1e-3);
 }
 
+// True if both values have the same bits, or both are NaN
+template<typename T>
+bool sameValue(const T a, const T b)
+{
+  if (std::isnan(a) || std::isnan(b)) {
+    return std::isnan(a) && std::isnan(b);
+  }
+  return std::memcmp(&a, &b, sizeof(T)) == 0;
+}
+
+// Angles around every multiple of pi up to 6 pi, a sweep up to ~150 rad and special values
+template<typename T>
+std::vector<T> angleTestValues()
+{
+  std::vector<T> values;
+  for (int k = -6; k <= 6; k++) {
+    const T base = static_cast<T>(k * M_PI);
+    T below = base, above = base;
+    for (int n = 0; n < 4; n++) {
+      values.push_back(below);
+      values.push_back(above);
+      below = std::nextafter(below, -std::numeric_limits<T>::infinity());
+      above = std::nextafter(above, std::numeric_limits<T>::infinity());
+    }
+  }
+  for (int k = -400; k <= 400; k++) {
+    values.push_back(static_cast<T>(k * 0.37));
+  }
+  values.push_back(static_cast<T>(0.0));
+  values.push_back(static_cast<T>(-0.0));
+  values.push_back(std::numeric_limits<T>::infinity());
+  values.push_back(-std::numeric_limits<T>::infinity());
+  values.push_back(std::numeric_limits<T>::quiet_NaN());
+  return values;
+}
+
+TEST(UtilsTests, AnglesMatchFmodReference)
+{
+  // fmodTwoPi gives the same bits as std::fmod, also at the multiples of its divisor
+  auto values_d = angleTestValues<double>();
+  auto values_f = angleTestValues<float>();
+  for (int k = -3; k <= 3; k++) {
+    values_d.push_back(k * (2.0 * M_PI));
+    values_f.push_back(static_cast<float>(k) * (2.0f * M_PIF));
+  }
+  for (const double x : values_d) {
+    EXPECT_TRUE(sameValue(fmodTwoPi(x, 2.0 * M_PI), std::fmod(x, 2.0 * M_PI))) << x;
+  }
+  for (const float x : values_f) {
+    EXPECT_TRUE(sameValue(fmodTwoPi(x, 2.0f * M_PIF), std::fmod(x, 2.0f * M_PIF))) << x;
+  }
+
+  // normalizeAngle and shortestAngularDistance give the same bits as the angles package
+  for (const double x : values_d) {
+    EXPECT_TRUE(sameValue(normalizeAngle(x), angles::normalize_angle(x))) << x;
+  }
+  for (size_t i = 0; i < values_f.size(); i++) {
+    const float from = values_f[i];
+    const float to = values_f[(i * 7 + 3) % values_f.size()];
+    EXPECT_TRUE(
+      sameValue(
+        shortestAngularDistance(from, to),
+        angles::shortest_angular_distance(from, to))) << from << " " << to;
+  }
+
+  // normalize_angles gives the same bits as std::fmod
+  Eigen::ArrayXf angles = Eigen::Map<const Eigen::ArrayXf>(values_f.data(), values_f.size());
+  const Eigen::ArrayXf normalized = normalize_angles(angles).eval();
+  for (Eigen::Index i = 0; i < angles.size(); i++) {
+    const float remainder = std::fmod(angles(i) + M_PIF, 2.0f * M_PIF);
+    const float expected = remainder < 0.0f ? remainder + M_PIF : remainder - M_PIF;
+    EXPECT_TRUE(sameValue(normalized(i), expected)) << angles(i);
+  }
+}
+
 TEST(UtilsTests, FurthestAndClosestReachedPoint)
 {
   models::State state;
@@ -262,6 +341,84 @@ TEST(UtilsTests, FurthestReachedPointUturn)
   EXPECT_LE(result, 6u);
 }
 
+// findPathFurthestReachedPoint without skipping trajectories that cannot raise the result
+size_t referenceFurthestReachedPoint(const CriticData & data)
+{
+  const int traj_cols = data.trajectories.x.cols();
+  const int n_rows = static_cast<int>(data.trajectories.x.rows());
+  const int n_cols = static_cast<int>(data.path.x.size());
+  std::vector<float> path_integrated_dists(n_cols, 0.0f);
+  for (int i = 1; i < n_cols; ++i) {
+    const float dx = data.path.x(i) - data.path.x(i - 1);
+    const float dy = data.path.y(i) - data.path.y(i - 1);
+    path_integrated_dists[i] = path_integrated_dists[i - 1] + sqrtf(dx * dx + dy * dy);
+  }
+  const Eigen::ArrayXf traj_integrated_dists =
+    ((data.trajectories.x.rightCols(traj_cols - 1) -
+    data.trajectories.x.leftCols(traj_cols - 1)).square() +
+    (data.trajectories.y.rightCols(traj_cols - 1) -
+    data.trajectories.y.leftCols(traj_cols - 1)).square())
+    .sqrt().rowwise().sum();
+  const auto & traj_x_end = data.trajectories.x.col(traj_cols - 1);
+  const auto & traj_y_end = data.trajectories.y.col(traj_cols - 1);
+  int max_idx = 0;
+  for (int i = 0; i < n_rows; ++i) {
+    int max_reachable_idx = static_cast<int>(
+      std::lower_bound(
+        path_integrated_dists.begin(), path_integrated_dists.end(),
+        traj_integrated_dists(i)) - path_integrated_dists.begin());
+    max_reachable_idx = std::min(max_reachable_idx, n_cols - 1);
+    Eigen::Index eucl_idx;
+    ((data.path.x.head(max_reachable_idx + 1) - traj_x_end(i)).square() +
+    (data.path.y.head(max_reachable_idx + 1) - traj_y_end(i)).square()).minCoeff(&eucl_idx);
+    max_idx = std::max(max_idx, static_cast<int>(eucl_idx));
+    if (max_idx == n_cols - 1) {
+      break;
+    }
+  }
+  return static_cast<size_t>(max_idx);
+}
+
+TEST(UtilsTests, FurthestReachedPointMatchesReference)
+{
+  models::State state;
+  models::Trajectories trajectories;
+  models::Path path;
+  geometry_msgs::msg::Pose goal;
+  Eigen::ArrayXf costs;
+  float model_dt = 0.05f;
+  CriticData data =
+  {state, trajectories, path, goal, costs, std::nullopt, model_dt, false, nullptr,
+    nullptr, std::nullopt, std::nullopt};
+
+  std::mt19937 gen(42);
+  std::uniform_real_distribution<float> speed(-0.3f, 1.4f);
+  std::uniform_real_distribution<float> turn(-0.05f, 0.05f);
+  for (int run = 0; run < 20; run++) {
+    // Curved path with 5 cm spacing
+    path.reset(150 + run * 10);
+    float yaw = 0.0f;
+    for (Eigen::Index i = 1; i < path.x.size(); i++) {
+      yaw += 0.02f * std::sin(0.3f * run + 0.05f * i);
+      path.x(i) = path.x(i - 1) + 0.05f * std::cos(yaw);
+      path.y(i) = path.y(i - 1) + 0.05f * std::sin(yaw);
+      path.yaws(i) = yaw;
+    }
+    // Random trajectories, rows not a multiple of the packet size
+    trajectories.reset(203, 60);
+    for (Eigen::Index t = 0; t < trajectories.x.rows(); t++) {
+      float traj_yaw = 0.0f;
+      const float v = speed(gen);
+      for (Eigen::Index j = 1; j < trajectories.x.cols(); j++) {
+        traj_yaw += turn(gen);
+        trajectories.x(t, j) = trajectories.x(t, j - 1) + 0.1f * v * std::cos(traj_yaw);
+        trajectories.y(t, j) = trajectories.y(t, j - 1) + 0.1f * v * std::sin(traj_yaw);
+      }
+    }
+    EXPECT_EQ(findPathFurthestReachedPoint(data), referenceFurthestReachedPoint(data));
+  }
+}
+
 TEST(UtilsTests, findPathCosts)
 {
   models::State state;
@@ -323,6 +480,65 @@ TEST(UtilsTests, findPathCosts)
       EXPECT_FALSE((*data3.path_pts_valid)[i]);
     } else {
       EXPECT_TRUE((*data3.path_pts_valid)[i]);
+    }
+  }
+}
+
+TEST(UtilsTests, SmootherMatchesWindowDefinition)
+{
+  // Every element is the 9 point Savitzky-Golay filter over the unfiltered sequence, which is
+  // extended by the control history before its start and by its last element after its end
+  Eigen::Array<float, 9, 1> filter;
+  filter << -21.0f, 14.0f, 39.0f, 54.0f, 59.0f, 54.0f, 39.0f, 14.0f, -21.0f;
+  filter /= 231.0f;
+  std::mt19937 engine(3);
+  std::uniform_real_distribution<float> value(-1.0f, 1.0f);
+
+  for (int size : {21, 22, 30, 57, 100}) {
+    for (bool shift : {false, true}) {
+      models::ControlSequence sequence;
+      sequence.vx = Eigen::ArrayXf::NullaryExpr(size, [&]() {return value(engine);});
+      sequence.vy = Eigen::ArrayXf::NullaryExpr(size, [&]() {return value(engine);});
+      sequence.wz = Eigen::ArrayXf::NullaryExpr(size, [&]() {return value(engine);});
+      std::array<mppi::models::Control, 4> history;
+      for (auto & control : history) {
+        control = {value(engine), value(engine), value(engine)};
+      }
+      const models::ControlSequence unfiltered = sequence;
+      const auto unfiltered_history = history;
+      models::OptimizerSettings settings;
+      settings.shift_control_sequence = shift;
+
+      savitskyGolayFilter(sequence, history, settings);
+
+      auto expect_filtered = [&](
+        const Eigen::ArrayXf & filtered, const Eigen::ArrayXf & initial,
+        const std::array<float, 4> & initial_history) {
+          const int last = size - 1;
+          for (int i = 0; i < last; i++) {
+            Eigen::Array<float, 9, 1> window;
+            for (int k = 0; k < 9; k++) {
+              const int index = i + k - 4;
+              window(k) = index < 0 ? initial_history[index + 4] : initial(std::min(index, last));
+            }
+            // up to the rounding of the sum of the 9 products
+            EXPECT_NEAR(filtered(i), (window * filter).sum(), 1e-6) <<
+              "size " << size << " at " << i;
+          }
+          EXPECT_EQ(filtered(last), initial(last));
+        };
+      expect_filtered(
+        sequence.vx, unfiltered.vx,
+        {unfiltered_history[0].vx, unfiltered_history[1].vx, unfiltered_history[2].vx,
+          unfiltered_history[3].vx});
+      expect_filtered(
+        sequence.vy, unfiltered.vy,
+        {unfiltered_history[0].vy, unfiltered_history[1].vy, unfiltered_history[2].vy,
+          unfiltered_history[3].vy});
+      expect_filtered(
+        sequence.wz, unfiltered.wz,
+        {unfiltered_history[0].wz, unfiltered_history[1].wz, unfiltered_history[2].wz,
+          unfiltered_history[3].wz});
     }
   }
 }
