@@ -15,6 +15,9 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITICS__PATH_ALIGN_CRITIC_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITICS__PATH_ALIGN_CRITIC_HPP_
 
+#include <cstdint>
+#include <vector>
+
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "nav2_mppi_controller/models/state.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
@@ -56,6 +59,13 @@ protected:
   bool use_path_orientations_{false};
   unsigned int power_{0};
   float weight_{0};
+
+  // Buffers kept to avoid reallocation
+  std::vector<float> path_integrated_distances_;
+  std::vector<utils::Pose2D> path_;
+  std::vector<uint8_t> path_pts_valid_;
+  Eigen::ArrayXf cost_;
+  Eigen::ArrayXXf traj_integrated_distances_;
 
   bool visualize_furthest_point_{false};
   nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr furthest_point_pub_;

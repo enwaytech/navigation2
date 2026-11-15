@@ -30,6 +30,16 @@
 namespace mppi
 {
 
+namespace
+{
+// Rounds up to a multiple of 16 floats, a whole number of SIMD packets for every vector
+// width, so that Eigen evaluates all elements with its packet math functions.
+Eigen::Index paddedRolloutSize(Eigen::Index rows)
+{
+  return (rows + 15) / 16 * 16;
+}
+}  // namespace
+
 void Optimizer::initialize(
   nav2::LifecycleNode::WeakPtr parent, const std::string & name,
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros,
@@ -194,6 +204,23 @@ void Optimizer::reset(bool reset_dynamic_speed_limits)
   costs_.setZero(settings_.batch_size);
   generated_trajectories_.reset(settings_.batch_size, settings_.time_steps);
 
+  const Eigen::Index padded_batch = paddedRolloutSize(settings_.batch_size);
+  rollout_yaws_.setZero(padded_batch);
+  rollout_cos_.setZero(padded_batch);
+  rollout_sin_.setZero(padded_batch);
+  rollout_x_.setZero(settings_.batch_size);
+  rollout_y_.setZero(settings_.batch_size);
+  rollout_dx_.setZero(settings_.batch_size);
+  rollout_dy_.setZero(settings_.batch_size);
+  optimal_cos_.setZero(settings_.time_steps);
+  optimal_sin_.setZero(settings_.time_steps);
+  optimal_dx_.setZero(settings_.time_steps);
+  optimal_dy_.setZero(settings_.time_steps);
+  optimal_sequence_.setZero(settings_.time_steps, isHolonomic() ? 3 : 2);
+  optimal_trajectory_.setZero(settings_.time_steps, 3);
+  control_costs_.setZero(settings_.batch_size);
+  softmaxes_.setZero(settings_.batch_size);
+
   noise_generator_.reset(settings_, isHolonomic());
   motion_model_->initialize(settings_.constraints, settings_.model_dt,
     settings_.model_delay_vx, settings_.model_delay_vy, settings_.model_delay_wz);
@@ -261,7 +288,7 @@ std::tuple<geometry_msgs::msg::TwistStamped, Eigen::ArrayXXf> Optimizer::evalCon
     shiftControlSequence();
   }
 
-  return std::make_tuple(control, optimal_trajectory);
+  return std::make_tuple(control, std::move(optimal_trajectory));
 }
 
 void Optimizer::optimize()
@@ -435,20 +462,24 @@ void Optimizer::integrateStateVelocities(
     traj_yaws(i) = last_yaw;
   }
 
-  Eigen::ArrayXf yaw_cos = traj_yaws.cos();
-  Eigen::ArrayXf yaw_sin = traj_yaws.sin();
+  auto & yaw_cos = optimal_cos_;
+  auto & yaw_sin = optimal_sin_;
+  auto & dx = optimal_dx_;
+  auto & dy = optimal_dy_;
+  yaw_cos = traj_yaws.cos();
+  yaw_sin = traj_yaws.sin();
   utils::shiftColumnsByOnePlace(yaw_cos, 1);
   utils::shiftColumnsByOnePlace(yaw_sin, 1);
   yaw_cos(0) = cosf(initial_yaw);
   yaw_sin(0) = sinf(initial_yaw);
 
-  auto dx = (vx * yaw_cos).eval();
-  auto dy = (vx * yaw_sin).eval();
+  dx = vx * yaw_cos;
+  dy = vx * yaw_sin;
 
   if (isHolonomic()) {
     auto vy = sequence.col(2);
-    dx = (dx - vy * yaw_sin).eval();
-    dy = (dy + vy * yaw_cos).eval();
+    dx -= vy * yaw_sin;
+    dy += vy * yaw_cos;
   }
 
   float last_x = state_.pose.pose.position.x;
@@ -466,50 +497,74 @@ void Optimizer::integrateStateVelocities(
   const models::State & state) const
 {
   auto initial_yaw = static_cast<float>(tf2::getYaw(state.pose.pose.orientation));
-  const size_t n_cols = trajectories.yaws.cols();
+  const Eigen::Index n_rows = trajectories.yaws.rows();
+  const Eigen::Index n_cols = trajectories.yaws.cols();
+  if (n_rows == 0 || n_cols == 0) {
+    return;
+  }
 
-  Eigen::ArrayXf last_yaws = Eigen::ArrayXf::Constant(trajectories.yaws.rows(), initial_yaw);
-  for (size_t i = 0; i != n_cols; i++) {
-    last_yaws += state.wz.col(i) * settings_.model_dt;
+  // All time steps are integrated column by column, so every column is read and written
+  // once while the per-trajectory accumulators stay in cache.
+  const Eigen::Index n_padded = paddedRolloutSize(n_rows);
+  if (rollout_yaws_.size() != n_padded) {
+    rollout_yaws_.setZero(n_padded);
+    rollout_cos_.setZero(n_padded);
+    rollout_sin_.setZero(n_padded);
+  }
+  rollout_x_.resize(n_rows);
+  rollout_y_.resize(n_rows);
+  rollout_dx_.resize(n_rows);
+  rollout_dy_.resize(n_rows);
+
+  auto last_yaws = rollout_yaws_.head(n_rows);
+  auto yaw_cos = rollout_cos_.head(n_rows);
+  auto yaw_sin = rollout_sin_.head(n_rows);
+  auto & last_x = rollout_x_;
+  auto & last_y = rollout_y_;
+  auto & dx = rollout_dx_;
+  auto & dy = rollout_dy_;
+
+  last_yaws.setConstant(initial_yaw);
+  last_x.setConstant(state.pose.pose.position.x);
+  last_y.setConstant(state.pose.pose.position.y);
+  // Displacement of time step i uses the heading of time step i - 1
+  yaw_cos.setConstant(cosf(initial_yaw));
+  yaw_sin.setConstant(sinf(initial_yaw));
+
+  const bool is_holo = isHolonomic();
+  const float model_dt = settings_.model_dt;
+  for (Eigen::Index i = 0; i != n_cols; i++) {
+    last_yaws += state.wz.col(i) * model_dt;
     trajectories.yaws.col(i) = last_yaws;
-  }
 
-  Eigen::ArrayXXf yaw_cos = trajectories.yaws.cos();
-  Eigen::ArrayXXf yaw_sin = trajectories.yaws.sin();
-  utils::shiftColumnsByOnePlace(yaw_cos, 1);
-  utils::shiftColumnsByOnePlace(yaw_sin, 1);
-  yaw_cos.col(0) = cosf(initial_yaw);
-  yaw_sin.col(0) = sinf(initial_yaw);
-
-  auto dx = (state.vx * yaw_cos).eval();
-  auto dy = (state.vx * yaw_sin).eval();
-
-  if (isHolonomic()) {
-    dx -= state.vy * yaw_sin;
-    dy += state.vy * yaw_cos;
-  }
-
-  Eigen::ArrayXf last_x = Eigen::ArrayXf::Constant(
-    trajectories.x.rows(),
-    state.pose.pose.position.x);
-  Eigen::ArrayXf last_y = Eigen::ArrayXf::Constant(
-    trajectories.y.rows(),
-    state.pose.pose.position.y);
-
-  for (size_t i = 0; i != n_cols; i++) {
-    last_x += dx.col(i) * settings_.model_dt;
-    last_y += dy.col(i) * settings_.model_dt;
+    if (is_holo) {
+      // Separate statements keep the rounding of each product and sum
+      dx = state.vx.col(i) * yaw_cos;
+      dy = state.vx.col(i) * yaw_sin;
+      dx -= state.vy.col(i) * yaw_sin;
+      dy += state.vy.col(i) * yaw_cos;
+      last_x += dx * model_dt;
+      last_y += dy * model_dt;
+    } else {
+      last_x += (state.vx.col(i) * yaw_cos) * model_dt;
+      last_y += (state.vx.col(i) * yaw_sin) * model_dt;
+    }
     trajectories.x.col(i) = last_x;
     trajectories.y.col(i) = last_y;
+
+    if (i + 1 != n_cols) {
+      rollout_cos_ = rollout_yaws_.cos();
+      rollout_sin_ = rollout_yaws_.sin();
+    }
   }
 }
 
 Eigen::ArrayXXf Optimizer::getOptimizedTrajectory()
 {
   const bool is_holo = isHolonomic();
-  Eigen::ArrayXXf sequence = Eigen::ArrayXXf(settings_.time_steps, is_holo ? 3 : 2);
-  Eigen::Array<float, Eigen::Dynamic, 3> trajectories =
-    Eigen::Array<float, Eigen::Dynamic, 3>(settings_.time_steps, 3);
+  auto & sequence = optimal_sequence_;
+  sequence.resize(settings_.time_steps, is_holo ? 3 : 2);
+  optimal_trajectory_.resize(settings_.time_steps, 3);
 
   sequence.col(0) = control_sequence_.vx;
   sequence.col(1) = control_sequence_.wz;
@@ -518,8 +573,8 @@ Eigen::ArrayXXf Optimizer::getOptimizedTrajectory()
     sequence.col(2) = control_sequence_.vy;
   }
 
-  integrateStateVelocities(trajectories, sequence);
-  return trajectories;
+  integrateStateVelocities(optimal_trajectory_, sequence);
+  return optimal_trajectory_;
 }
 
 const models::ControlSequence & Optimizer::getOptimalControlSequence()
@@ -532,29 +587,24 @@ void Optimizer::updateControlSequence()
   const bool is_holo = isHolonomic();
   auto & s = settings_;
 
-  auto vx_T = control_sequence_.vx.transpose();
-  auto bounded_noises_vx = state_.cvx.rowwise() - vx_T;
   const float gamma_vx = s.gamma / (s.sampling_std.vx * s.sampling_std.vx);
-  costs_ += (gamma_vx * (bounded_noises_vx.rowwise() * vx_T).rowwise().sum()).eval();
+  addControlCosts(state_.cvx, control_sequence_.vx, gamma_vx);
 
   if (s.sampling_std.wz > 0.0f) {
-    auto wz_T = control_sequence_.wz.transpose();
-    auto bounded_noises_wz = state_.cwz.rowwise() - wz_T;
     const float gamma_wz = s.gamma / (s.sampling_std.wz * s.sampling_std.wz);
-    costs_ += (gamma_wz * (bounded_noises_wz.rowwise() * wz_T).rowwise().sum()).eval();
+    addControlCosts(state_.cwz, control_sequence_.wz, gamma_wz);
   }
 
   if (is_holo) {
-    auto vy_T = control_sequence_.vy.transpose();
-    auto bounded_noises_vy = state_.cvy.rowwise() - vy_T;
     const float gamma_vy = s.gamma / (s.sampling_std.vy * s.sampling_std.vy);
-    costs_ += (gamma_vy * (bounded_noises_vy.rowwise() * vy_T).rowwise().sum()).eval();
+    addControlCosts(state_.cvy, control_sequence_.vy, gamma_vy);
   }
 
   auto costs_normalized = costs_ - costs_.minCoeff();
   const float inv_temp = 1.0f / s.temperature;
   constexpr float kMaxExponent = 80.0f;
-  auto softmaxes = ((-inv_temp * costs_normalized).cwiseMax(-kMaxExponent)).exp().eval();
+  auto & softmaxes = softmaxes_;
+  softmaxes = ((-inv_temp * costs_normalized).cwiseMax(-kMaxExponent)).exp();
   softmaxes /= softmaxes.sum();
 
   auto softmax_mat = softmaxes.matrix();
@@ -568,6 +618,24 @@ void Optimizer::updateControlSequence()
   utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
 
   applyControlSequenceConstraints();
+}
+
+void Optimizer::addControlCosts(
+  const Eigen::ArrayXXf & controls, const Eigen::ArrayXf & sequence, float gamma)
+{
+  const Eigen::Index n_cols = controls.cols();
+  if (n_cols == 0) {
+    return;
+  }
+
+  // Sum of (control - sequence) * sequence over the time steps, accumulated column by
+  // column in time step order
+  auto & sums = control_costs_;
+  sums = (controls.col(0) - sequence(0)) * sequence(0);
+  for (Eigen::Index i = 1; i != n_cols; i++) {
+    sums += (controls.col(i) - sequence(i)) * sequence(i);
+  }
+  costs_ += gamma * sums;
 }
 
 geometry_msgs::msg::TwistStamped Optimizer::getControlFromSequenceAsTwist(

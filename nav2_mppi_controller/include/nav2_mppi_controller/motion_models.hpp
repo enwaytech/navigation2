@@ -19,6 +19,7 @@
 #include <Eigen/Dense>
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -112,48 +113,41 @@ public:
 
     unsigned int n_cols = state.vx.cols();
 
-    for (unsigned int i = 1; i < n_cols; i++) {
-      auto lower_bound_vx = (state.vx.col(i - 1) >
-        0).select(
-        state.vx.col(i - 1) + min_delta_vx,
-        state.vx.col(i - 1) - max_delta_vx);
-      auto upper_bound_vx = (state.vx.col(i - 1) >
-        0).select(
-        state.vx.col(i - 1) + max_delta_vx,
-        state.vx.col(i - 1) - min_delta_vx);
-
-      state.cvx.col(i - 1) = state.cvx.col(i - 1)
-        .cwiseMax(lower_bound_vx)
-        .cwiseMin(upper_bound_vx);
-      state.vx.col(i) = state.cvx.col(i - 1);
-
-      state.cwz.col(i - 1) = state.cwz.col(i - 1)
-        .cwiseMax(state.wz.col(i - 1) - max_delta_wz)
-        .cwiseMin(state.wz.col(i - 1) + max_delta_wz);
-      state.wz.col(i) = state.cwz.col(i - 1);
-
-      if (is_holo) {
-        auto lower_bound_vy = (state.vy.col(i - 1) >
-          0).select(
-          state.vy.col(i - 1) + min_delta_vy,
-          state.vy.col(i - 1) - max_delta_vy);
-        auto upper_bound_vy = (state.vy.col(i - 1) >
-          0).select(
-          state.vy.col(i - 1) + max_delta_vy,
-          state.vy.col(i - 1) - min_delta_vy);
-
-        state.cvy.col(i - 1) = state.cvy.col(i - 1)
-          .cwiseMax(lower_bound_vy)
-          .cwiseMin(upper_bound_vy);
-        state.vy.col(i) = state.cvy.col(i - 1);
-      }
-    }
     const unsigned int offset_vx = std::floor((model_delay_vx_ / model_dt_) + 0.5);
     const unsigned int offset_vy = std::floor((model_delay_vy_ / model_dt_) + 0.5);
     const unsigned int offset_wz = std::floor((model_delay_wz_ / model_dt_) + 0.5);
 
-    if (offset_vx > 0u || offset_wz > 0u || (is_holo && offset_vy > 0u)) {
-      applyDelayShift(state, is_holo, offset_vx, offset_vy, offset_wz);
+    // The input delay is applied in the same pass: the bounded control of column i - 1
+    // becomes the velocity of column i - 1 + shift, and columns [1, offset) replay the
+    // command history.
+    const unsigned int shift_vx = std::max(offset_vx, 1u);
+    const unsigned int shift_vy = std::max(offset_vy, 1u);
+    const unsigned int shift_wz = std::max(offset_wz, 1u);
+    fillDelayWindow(state.vx, offset_vx, cmd_history_vx_);
+    fillDelayWindow(state.wz, offset_wz, cmd_history_wz_);
+    if (is_holo) {
+      fillDelayWindow(state.vy, offset_vy, cmd_history_vy_);
+    }
+
+    // Bounds the controls of column i - 1 against the velocity of column i - 1 before the
+    // delay shift (the initial velocity or the previous bounded control) and writes them to
+    // the shifted velocity column
+    auto bound_axis = [n_cols](
+      Eigen::ArrayXXf & velocities, Eigen::ArrayXXf & controls, unsigned int i,
+      unsigned int shift, float min_delta, float max_delta) {
+        const float * prev = i == 1 ? velocities.col(0).data() : controls.col(i - 2).data();
+        float * velocity = i - 1 + shift < n_cols ? velocities.col(i - 1 + shift).data() : nullptr;
+        boundControls(
+          controls.col(i - 1).data(), prev, velocity, controls.rows(), min_delta, max_delta);
+      };
+
+    for (unsigned int i = 1; i < n_cols; i++) {
+      bound_axis(state.vx, state.cvx, i, shift_vx, min_delta_vx, max_delta_vx);
+      // Symmetric bounds: p + (-d) and p - (-d) equal p - d and p + d exactly
+      bound_axis(state.wz, state.cwz, i, shift_wz, -max_delta_wz, max_delta_wz);
+      if (is_holo) {
+        bound_axis(state.vy, state.cvy, i, shift_vy, min_delta_vy, max_delta_vy);
+      }
     }
   }
 
@@ -171,38 +165,65 @@ public:
 
 protected:
   /**
-    * @brief Apply the per-axis input-delay shift to velocity rollout.
-    *
-    * For j in [1, offset) — the delay window — fill `dst` with history[j]
+    * @brief Bound controls by the acceleration limits relative to the previous velocities
+    * @param control Controls to bound in place
+    * @param prev Previous velocities
+    * @param velocity Optional destination for a copy of the bounded controls
+    * @param size Number of elements
+    * @param min_delta Lower velocity change limit when the previous velocity is positive
+    * @param max_delta Upper velocity change limit when the previous velocity is positive
     */
-  void applyDelayShift(
-    models::State & state, bool is_holo,
-    unsigned int offset_vx, unsigned int offset_vy, unsigned int offset_wz) const
+  static void boundControls(
+    float * control, const float * prev, float * velocity, Eigen::Index size,
+    float min_delta, float max_delta)
   {
-    auto shift = [](Eigen::ArrayXXf & velocities, unsigned int offset,
-      const std::vector<float> & history) {
-        const unsigned int cols = static_cast<unsigned int>(velocities.cols());
-        if (offset == 0u || cols == 0u) {
-          return;
-        }
-
-        // Shift cols in-place right-to-left by offset
-        for (unsigned int k = (offset < cols) ? cols - offset : 0u; k > 0; --k) {
-          velocities.col(offset + k - 1) = velocities.col(k);
-        }
-
-        // Fill delay window cols with the in-flight commands from history.
-        const unsigned int end = std::min(offset, cols);
-        for (unsigned int j = 1; j < end; ++j) {
-          velocities.col(j).setConstant(history[j]);
-        }
+    // Lower bound p + min_delta if p > 0 else p - max_delta, upper bound p + max_delta if
+    // p > 0 else p - min_delta. Adding a negated delta is exact, so only the delta is
+    // selected, with a bit mask: compilers turn a conditional floating point addition into
+    // a branch, which does not vectorize.
+    auto to_bits = [](float f) {
+        uint32_t u;
+        std::memcpy(&u, &f, sizeof(u));
+        return u;
       };
+    auto to_float = [](uint32_t u) {
+        float f;
+        std::memcpy(&f, &u, sizeof(f));
+        return f;
+      };
+    const uint32_t lower_pos = to_bits(min_delta);
+    const uint32_t lower_neg = to_bits(-max_delta);
+    const uint32_t upper_pos = to_bits(max_delta);
+    const uint32_t upper_neg = to_bits(-min_delta);
+    auto bound = [&](float c, float p) {
+        const uint32_t positive = 0u - static_cast<uint32_t>(p > 0);
+        const float lower = p + to_float((lower_pos & positive) | (lower_neg & ~positive));
+        const float upper = p + to_float((upper_pos & positive) | (upper_neg & ~positive));
+        return std::min(std::max(c, lower), upper);
+      };
+    if (velocity != nullptr) {
+      for (Eigen::Index r = 0; r != size; r++) {
+        const float bounded = bound(control[r], prev[r]);
+        control[r] = bounded;
+        velocity[r] = bounded;
+      }
+    } else {
+      for (Eigen::Index r = 0; r != size; r++) {
+        control[r] = bound(control[r], prev[r]);
+      }
+    }
+  }
 
-    shift(state.vx, offset_vx, cmd_history_vx_);
-    shift(state.wz, offset_wz, cmd_history_wz_);
-
-    if (is_holo) {
-      shift(state.vy, offset_vy, cmd_history_vy_);
+  /**
+    * @brief Fill the delay window columns [1, offset) with the in-flight commands
+    *        from the history ring buffer.
+    */
+  static void fillDelayWindow(
+    Eigen::ArrayXXf & velocities, unsigned int offset, const std::vector<float> & history)
+  {
+    const unsigned int end = std::min(offset, static_cast<unsigned int>(velocities.cols()));
+    for (unsigned int j = 1; j < end; ++j) {
+      velocities.col(j).setConstant(history[j]);
     }
   }
 

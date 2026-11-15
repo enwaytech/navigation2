@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <cmath>
+
 #include "nav2_mppi_controller/critics/path_align_critic.hpp"
 
 namespace mppi::critics
@@ -94,8 +97,10 @@ void PathAlignCritic::score(CriticData & data)
   //  max(min_distance_occupancy_check_, furthest_reached_path_point)
   const size_t path_segments_count = data.path.x.size() - 1;
   size_t occupancy_check_distance_idx = 0;
-  std::vector<float> path_integrated_distances(path_segments_count, 0.0f);
-  std::vector<utils::Pose2D> path(path_segments_count);
+  std::vector<float> & path_integrated_distances = path_integrated_distances_;
+  std::vector<utils::Pose2D> & path = path_;
+  path_integrated_distances.assign(path_segments_count, 0.0f);
+  path.resize(path_segments_count);
   float dx = 0.0f, dy = 0.0f;
   for (unsigned int i = 1; i != path_segments_count; i++) {
     auto & pose = path[i - 1];
@@ -133,10 +138,10 @@ void PathAlignCritic::score(CriticData & data)
   // Don't apply when dynamic obstacles are blocking significant proportions of the local path
   const float occupancy_check_distance_idx_flt = static_cast<float>(occupancy_check_distance_idx);
   utils::setPathCostsIfNotSet(data, costmap_ros_);
-  std::vector<bool> & path_pts_valid = *data.path_pts_valid;
+  const std::vector<bool> & path_pts_valid_bits = *data.path_pts_valid;
   float invalid_ctr = 0.0f;
   for (size_t i = 0; i < occupancy_check_distance_idx; i++) {
-    if (!path_pts_valid[i]) {invalid_ctr += 1.0f;}
+    if (!path_pts_valid_bits[i]) {invalid_ctr += 1.0f;}
     if (invalid_ctr / occupancy_check_distance_idx_flt > max_path_occupancy_ratio_ &&
       invalid_ctr > 2.0f)
     {
@@ -145,87 +150,100 @@ void PathAlignCritic::score(CriticData & data)
     }
   }
 
+  // Byte copy of the validity flags, cheaper to look up per sample than std::vector<bool>
+  path_pts_valid_.assign(path_pts_valid_bits.begin(), path_pts_valid_bits.end());
+  const std::vector<uint8_t> & path_pts_valid = path_pts_valid_;
+
   // Finish populating the path vector
   auto & final_pose = path[path_segments_count - 1];
   final_pose.x = data.path.x(path_segments_count - 1);
   final_pose.y = data.path.y(path_segments_count - 1);
   final_pose.theta = data.path.yaws(path_segments_count - 1);
 
-  float summed_path_dist = 0.0f, dyaw = 0.0f;
-  unsigned int num_samples = 0u;
-  unsigned int path_pt = 0u;
-  float traj_integrated_distance = 0.0f;
+  // Strided trajectory points (every trajectory_point_step_ time step). The trajectories are
+  // column-major, so point (t, p) is at t + p * outer_stride.
+  const Eigen::Index batch_size = data.trajectories.x.rows();
+  const Eigen::Index strided_traj_cols =
+    (data.trajectories.x.cols() - 1) / trajectory_point_step_ + 1;
+  const Eigen::Index outer_stride = batch_size * trajectory_point_step_;
+  const float * const traj_x = data.trajectories.x.data();
+  const float * const traj_y = data.trajectories.y.data();
+  const float * const traj_yaws = data.trajectories.yaws.data();
 
-  int strided_traj_rows = data.trajectories.x.rows();
-  int strided_traj_cols = floor((data.trajectories.x.cols() - 1) / trajectory_point_step_) + 1;
-  int outer_stride = strided_traj_rows * trajectory_point_step_;
-  // Get strided trajectory information
-  const auto T_x = Eigen::Map<const Eigen::ArrayXXf, 0,
-      Eigen::Stride<-1, -1>>(
-    data.trajectories.x.data(),
-    strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
-  const auto T_y = Eigen::Map<const Eigen::ArrayXXf, 0,
-      Eigen::Stride<-1, -1>>(
-    data.trajectories.y.data(),
-    strided_traj_rows, strided_traj_cols, Eigen::Stride<-1, -1>(outer_stride, 1));
-  const auto T_yaw = Eigen::Map<const Eigen::ArrayXXf, 0,
-      Eigen::Stride<-1, -1>>(
-    data.trajectories.yaws.data(), strided_traj_rows, strided_traj_cols,
-    Eigen::Stride<-1, -1>(outer_stride, 1));
-  const auto traj_sampled_size = T_x.cols();
+  Eigen::ArrayXf & cost = cost_;
+  cost.setZero(data.costs.rows());
 
-  const size_t batch_size = data.trajectories.x.rows();
-  Eigen::ArrayXf cost(data.costs.rows());
-  cost.setZero();
+  const utils::Pose2D * const path_data = path.data();
+  const uint8_t * const path_pts_valid_data = path_pts_valid.data();
+  const bool use_path_orientations = use_path_orientations_;
 
-  for (size_t t = 0; t < batch_size; ++t) {
-    summed_path_dist = 0.0f;
-    num_samples = 0u;
-    traj_integrated_distance = 0.0f;
-    path_pt = 0u;
-    float Tx_m1 = T_x(t, 0);
-    float Ty_m1 = T_y(t, 0);
-    // At each (strided) traj point, find the path point whose integrated distance along
-    // the path is closest to the trajectory point's integrated distance along the trajectory.
-    // if that path point is not in collision, compute the Euclidean distance between the matching
-    // path pt & traj pt the total cost is the average of those distances across the trajectory
-    for (int p = 1; p < traj_sampled_size; p++) {
-      const float Tx = T_x(t, p);
-      const float Ty = T_y(t, p);
-      dx = Tx - Tx_m1;
-      dy = Ty - Ty_m1;
-      Tx_m1 = Tx;
-      Ty_m1 = Ty;
-      traj_integrated_distance += sqrtf(dx * dx + dy * dy);
-      path_pt = utils::findClosestPathPt(
-        path_integrated_distances, traj_integrated_distance, path_pt);
+  // Trajectories are processed in blocks small enough for their integrated distances to stay
+  // in cache. Column p of traj_integrated_distances_ holds the distance up to strided point p.
+  constexpr Eigen::Index block_size = 128;
+  traj_integrated_distances_.resize(block_size, strided_traj_cols);
+  traj_integrated_distances_.col(0).setZero();
+  for (Eigen::Index t0 = 0; t0 < batch_size; t0 += block_size) {
+    const Eigen::Index block_rows = std::min(block_size, batch_size - t0);
 
-      // The nearest path point to align to needs to be not in collision, else
-      // let the obstacle critic take over in this region due to dynamic obstacles
-      if (path_pts_valid[path_pt]) {
-        const auto & pose = path[path_pt];
-        dx = pose.x - Tx;
-        dy = pose.y - Ty;
-        num_samples++;
-        if (use_path_orientations_) {
-          dyaw = angles::shortest_angular_distance(pose.theta, T_yaw(t, p));
-          summed_path_dist += sqrtf(dx * dx + dy * dy + dyaw * dyaw);
-        } else {
-          summed_path_dist += sqrtf(dx * dx + dy * dy);
-        }
+    // Column by column, so that this loop vectorizes
+    for (Eigen::Index p = 1; p < strided_traj_cols; p++) {
+      const float * x0 = traj_x + (p - 1) * outer_stride + t0;
+      const float * y0 = traj_y + (p - 1) * outer_stride + t0;
+      const float * x1 = x0 + outer_stride;
+      const float * y1 = y0 + outer_stride;
+      const float * dist0 = &traj_integrated_distances_(0, p - 1);
+      float * dist1 = &traj_integrated_distances_(0, p);
+      for (Eigen::Index b = 0; b < block_rows; b++) {
+        const float seg_dx = x1[b] - x0[b];
+        const float seg_dy = y1[b] - y0[b];
+        dist1[b] = dist0[b] + std::sqrt(seg_dx * seg_dx + seg_dy * seg_dy);
       }
     }
-    if (num_samples > 0u) {
-      cost(t) = summed_path_dist / static_cast<float>(num_samples);
-    } else {
-      cost(t) = 0.0f;
+
+    for (Eigen::Index b = 0; b < block_rows; b++) {
+      const Eigen::Index t = t0 + b;
+      float summed_path_dist = 0.0f;
+      unsigned int num_samples = 0u;
+      unsigned int path_pt = 0u;
+      // At each (strided) traj point, find the path point whose integrated distance along
+      // the path is closest to the trajectory point's integrated distance along the trajectory.
+      // if that path point is not in collision, compute the Euclidean distance between the
+      // matching path pt & traj pt the total cost is the average of those distances across
+      // the trajectory
+      for (Eigen::Index p = 1; p < strided_traj_cols; p++) {
+        path_pt = utils::findClosestPathPt(
+          path_integrated_distances, traj_integrated_distances_(b, p), path_pt);
+
+        // The nearest path point to align to needs to be not in collision, else
+        // let the obstacle critic take over in this region due to dynamic obstacles
+        if (path_pts_valid_data[path_pt]) {
+          const auto & pose = path_data[path_pt];
+          const Eigen::Index idx = t + p * outer_stride;
+          dx = pose.x - traj_x[idx];
+          dy = pose.y - traj_y[idx];
+          num_samples++;
+          if (use_path_orientations) {
+            const float dyaw = utils::shortestAngularDistance(pose.theta, traj_yaws[idx]);
+            summed_path_dist += sqrtf(dx * dx + dy * dy + dyaw * dyaw);
+          } else {
+            summed_path_dist += sqrtf(dx * dx + dy * dy);
+          }
+        }
+      }
+      if (num_samples > 0u) {
+        cost(t) = summed_path_dist / static_cast<float>(num_samples);
+      } else {
+        cost(t) = 0.0f;
+      }
     }
   }
 
+  // Scaled in place, so that the product is rounded before it is added to the costs
+  cost *= weight_;
   if (power_ > 1u) {
-    data.costs += (cost * weight_).pow(power_).eval();
+    data.costs += cost.pow(power_);
   } else {
-    data.costs += (cost * weight_).eval();
+    data.costs += cost;
   }
 }
 

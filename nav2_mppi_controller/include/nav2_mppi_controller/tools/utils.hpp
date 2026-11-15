@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <limits>
 #include <memory>
@@ -244,6 +245,52 @@ inline geometry_msgs::msg::Pose getLastPathPose(const models::Path & path)
 }
 
 /**
+  * @brief Computes std::fmod(x, 2 pi), calling it only for |x| >= 4 pi.
+  * The result is identical: fmod is exact, and for 2 pi <= |x| < 4 pi it equals
+  * x -/+ 2 pi, which is exactly representable (Sterbenz lemma).
+  * @param x Value
+  * @param two_pi 2 pi in the precision of x
+  * @return Remainder of x / two_pi with the sign of x
+  */
+template<typename T>
+inline T fmodTwoPi(const T x, const T two_pi)
+{
+  const T abs_x = std::abs(x);
+  if (abs_x < two_pi) {
+    return x;
+  }
+  if (abs_x < 2 * two_pi) {
+    // the outer copysign keeps the sign of x for a zero result
+    return std::copysign(x - std::copysign(two_pi, x), x);
+  }
+  return std::fmod(x, two_pi);
+}
+
+/**
+  * @brief Same result as angles::normalize_angle, without its fmod call for
+  * angles in (-5 pi, 3 pi)
+  * @param angle Angle in radians
+  * @return Angle normalized to [-pi, pi]
+  */
+inline double normalizeAngle(const double angle)
+{
+  const double result = fmodTwoPi(angle + M_PI, 2.0 * M_PI);
+  if (result <= 0.0) {return result + M_PI;}
+  return result - M_PI;
+}
+
+/**
+  * @brief Same result as angles::shortest_angular_distance, see normalizeAngle
+  * @param from Start angle
+  * @param to End angle
+  * @return Shortest distance between angles
+  */
+inline double shortestAngularDistance(const double from, const double to)
+{
+  return normalizeAngle(to - from);
+}
+
+/**
   * @brief normalize
   * Normalizes the angle to be -M_PIF circle to +M_PIF circle
   * It takes and returns radians.
@@ -255,7 +302,7 @@ auto normalize_angles(const T & angles)
 {
   return (angles + M_PIF).unaryExpr(
     [&](const float x) {
-      float remainder = std::fmod(x, 2.0f * M_PIF);
+      float remainder = fmodTwoPi(x, 2.0f * M_PIF);
       return remainder < 0.0f ? remainder + M_PIF : remainder - M_PIF;
     });
 }
@@ -320,6 +367,11 @@ inline size_t findPathFurthestReachedPoint(const CriticData & data)
         path_integrated_dists.begin(), path_integrated_dists.end(),
         traj_integrated_dists(i)) - path_integrated_dists.begin());
     max_reachable_idx = std::min(max_reachable_idx, n_cols - 1);
+
+    // The closest point cannot be beyond max_reachable_idx, so it cannot raise max_idx
+    if (max_reachable_idx <= max_idx) {
+      continue;
+    }
 
     // Bounded Euclidean search: closest path point within [0..max_reachable_idx]
     Eigen::Index eucl_idx;
@@ -474,10 +526,13 @@ inline void savitskyGolayFilter(
       return (data * filter).eval().sum();
     };
 
+  // Filters in place: the window holds the unfiltered values, and every element is read
+  // before the element at its index is written
   auto applyFilterOverAxis =
-    [&](Eigen::ArrayXf & sequence, const Eigen::ArrayXf & initial_sequence,
-    const float hist_0, const float hist_1, const float hist_2, const float hist_3) -> void
+    [&](Eigen::ArrayXf & sequence, const float hist_0, const float hist_1, const float hist_2,
+    const float hist_3) -> void
     {
+      const Eigen::ArrayXf & initial_sequence = sequence;
       float pt_m4 = hist_0;
       float pt_m3 = hist_1;
       float pt_m2 = hist_2;
@@ -509,15 +564,14 @@ inline void savitskyGolayFilter(
     };
 
   // Filter trajectories
-  const models::ControlSequence initial_control_sequence = control_sequence;
   applyFilterOverAxis(
-    control_sequence.vx, initial_control_sequence.vx, control_history[0].vx,
+    control_sequence.vx, control_history[0].vx,
     control_history[1].vx, control_history[2].vx, control_history[3].vx);
   applyFilterOverAxis(
-    control_sequence.vy, initial_control_sequence.vy, control_history[0].vy,
+    control_sequence.vy, control_history[0].vy,
     control_history[1].vy, control_history[2].vy, control_history[3].vy);
   applyFilterOverAxis(
-    control_sequence.wz, initial_control_sequence.wz, control_history[0].wz,
+    control_sequence.wz, control_history[0].wz,
     control_history[1].wz, control_history[2].wz, control_history[3].wz);
 
   // Update control history

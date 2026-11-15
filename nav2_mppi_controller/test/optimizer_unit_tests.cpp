@@ -13,12 +13,14 @@
 // limitations under the License.
 
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 #include "gtest/gtest.h"
 #include "rclcpp/rclcpp.hpp"
 #include "nav2_mppi_controller/optimizer.hpp"
 #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
+#include "tf2/utils.hpp"
 #include "tf2_ros/buffer.hpp"
 
 // Tests main optimizer functions
@@ -228,7 +230,51 @@ public:
   {
     return integrateStateVelocities(traj, state);
   }
+
+  Eigen::ArrayXf & grabCosts()
+  {
+    return costs_;
+  }
+
+  void addControlCostsWrapper(
+    const Eigen::ArrayXXf & controls, const Eigen::ArrayXf & sequence, float gamma)
+  {
+    return addControlCosts(controls, sequence, gamma);
+  }
 };
+
+// Reference rollout integrating whole matrices one quantity at a time
+static void referenceIntegrate(
+  models::Trajectories & traj, const models::State & state, float dt, bool is_holo)
+{
+  const float initial_yaw = static_cast<float>(tf2::getYaw(state.pose.pose.orientation));
+  const Eigen::Index n_cols = traj.yaws.cols();
+  Eigen::ArrayXf last_yaws = Eigen::ArrayXf::Constant(traj.yaws.rows(), initial_yaw);
+  for (Eigen::Index i = 0; i != n_cols; i++) {
+    last_yaws += state.wz.col(i) * dt;
+    traj.yaws.col(i) = last_yaws;
+  }
+  Eigen::ArrayXXf yaw_cos = traj.yaws.cos();
+  Eigen::ArrayXXf yaw_sin = traj.yaws.sin();
+  utils::shiftColumnsByOnePlace(yaw_cos, 1);
+  utils::shiftColumnsByOnePlace(yaw_sin, 1);
+  yaw_cos.col(0) = cosf(initial_yaw);
+  yaw_sin.col(0) = sinf(initial_yaw);
+  Eigen::ArrayXXf dx = state.vx * yaw_cos;
+  Eigen::ArrayXXf dy = state.vx * yaw_sin;
+  if (is_holo) {
+    dx -= state.vy * yaw_sin;
+    dy += state.vy * yaw_cos;
+  }
+  Eigen::ArrayXf last_x = Eigen::ArrayXf::Constant(traj.x.rows(), state.pose.pose.position.x);
+  Eigen::ArrayXf last_y = Eigen::ArrayXf::Constant(traj.y.rows(), state.pose.pose.position.y);
+  for (Eigen::Index i = 0; i != n_cols; i++) {
+    last_x += dx.col(i) * dt;
+    last_y += dy.col(i) * dt;
+    traj.x.col(i) = last_x;
+    traj.y.col(i) = last_y;
+  }
+}
 
 TEST(OptimizerTests, BasicInitializedFunctions)
 {
@@ -683,6 +729,80 @@ TEST(OptimizerTests, integrateStateVelocitiesTests)
 
     EXPECT_NEAR(traj.x(1, i), x, 1e-6);
     EXPECT_NEAR(traj.y(1, i), y, 1e-6);
+  }
+}
+
+TEST(OptimizerTests, integrateStateVelocitiesMatchesReference)
+{
+  auto node = std::make_shared<nav2::LifecycleNode>("my_node");
+  OptimizerTester optimizer_tester;
+  node->declare_parameter("controller_frequency", rclcpp::ParameterValue(30.0));
+  node->declare_parameter("mppic.batch_size", rclcpp::ParameterValue(1000));
+  node->declare_parameter("mppic.model_dt", rclcpp::ParameterValue(0.1));
+  node->declare_parameter("mppic.time_steps", rclcpp::ParameterValue(50));
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  std::string name = "test";
+  ParametersHandler param_handler(node, name);
+  rclcpp_lifecycle::State lstate;
+  costmap_ros->on_configure(lstate);
+  auto tf_buffer = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  optimizer_tester.initialize(node, "mppic", costmap_ros, tf_buffer, &param_handler);
+
+  // Batch sizes other than the configured one, odd ones not filling whole SIMD packets
+  for (const bool is_holo : {false, true}) {
+    optimizer_tester.resetMotionModel();
+    if (is_holo) {
+      optimizer_tester.testSetOmniModel();
+    } else {
+      optimizer_tester.testSetDiffModel();
+    }
+    for (const Eigen::Index rows : {1000, 1001, 7}) {
+      std::srand(7);
+      models::State state;
+      state.reset(rows, 37);
+      state.vx = Eigen::ArrayXXf::Random(rows, 37);
+      state.vy = Eigen::ArrayXXf::Random(rows, 37);
+      state.wz = 2.0f * Eigen::ArrayXXf::Random(rows, 37);
+      state.pose.pose.position.x = 3.5;
+      state.pose.pose.position.y = -1.25;
+      state.pose.pose.orientation.z = std::sin(0.4);
+      state.pose.pose.orientation.w = std::cos(0.4);
+
+      models::Trajectories traj;
+      traj.reset(rows, 37);
+      models::Trajectories expected = traj;
+      optimizer_tester.integrateStateVelocitiesWrapper(traj, state);
+      referenceIntegrate(expected, state, 0.1f, is_holo);
+
+      // Same operations in the same order, so the results are identical
+      EXPECT_TRUE((traj.yaws == expected.yaws).all());
+      EXPECT_TRUE((traj.x == expected.x).all());
+      EXPECT_TRUE((traj.y == expected.y).all());
+    }
+  }
+}
+
+TEST(OptimizerTests, addControlCostsTests)
+{
+  OptimizerTester optimizer_tester;
+  auto & costs = optimizer_tester.grabCosts();
+
+  // Fewer and more than four time steps take different accumulation paths
+  for (const Eigen::Index cols : {1, 3, 5, 50}) {
+    std::srand(3);
+    const Eigen::ArrayXXf controls = Eigen::ArrayXXf::Random(101, cols);
+    const Eigen::ArrayXf sequence = Eigen::ArrayXf::Random(cols);
+    costs = Eigen::ArrayXf::Constant(101, 2.0f);
+    optimizer_tester.addControlCostsWrapper(controls, sequence, 0.5f);
+
+    for (Eigen::Index r = 0; r != controls.rows(); r++) {
+      double sum = 0.0;
+      for (Eigen::Index i = 0; i != cols; i++) {
+        sum += (static_cast<double>(controls(r, i)) - sequence(i)) * sequence(i);
+      }
+      EXPECT_NEAR(costs(r), 2.0 + 0.5 * sum, 1e-5);
+    }
   }
 }
 

@@ -43,3 +43,13 @@ target_link_libraries(critics_tests
 if(${TEST_DEBUG_INFO})
   target_compile_definitions(critics_tests PUBLIC -DTEST_DEBUG_INFO)
 endif()
+
+# Exactness of the CostCritic collision checking against nav2_costmap_2d
+nav2_add_gtest(cost_critic_test cost_critic_test.cpp)
+target_link_libraries(cost_critic_test
+  mppi_controller
+  mppi_critics
+  rclcpp::rclcpp
+  rclcpp_lifecycle::rclcpp_lifecycle
+  nav2_costmap_2d::nav2_costmap_2d_core
+)

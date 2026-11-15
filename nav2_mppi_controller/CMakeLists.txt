@@ -45,6 +45,13 @@ if(COMPILER_SUPPORTS_FMA)
   add_compile_options(-mfma)
 endif()
 
+# Math functions do not need to set errno, which lets loops calling sqrt be vectorized
+check_cxx_compiler_flag("-fno-math-errno" COMPILER_SUPPORTS_NO_MATH_ERRNO)
+
+if(COMPILER_SUPPORTS_NO_MATH_ERRNO)
+  add_compile_options(-fno-math-errno)
+endif()
+
 # If building one the same hardware to be deployed on, try `-march=native`!
 
 add_library(mppi_controller SHARED

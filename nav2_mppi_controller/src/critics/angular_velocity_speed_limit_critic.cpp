@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
+
 #include "nav2_mppi_controller/critics/angular_velocity_speed_limit_critic.hpp"
 
 namespace mppi::critics
@@ -61,19 +63,44 @@ void AngularVelocitySpeedLimitCritic::score(CriticData & data)
   }
   auto & state = data.state;
   auto & costs = data.costs;
+  const Eigen::Index n_rows = state.vx.rows();
+  const Eigen::Index n_cols = state.vx.cols();
 
-  const auto wz = state.wz.abs();
-  const auto speed = (state.vx.square() + state.vy.square()).sqrt();
-  const auto wz_ratio = (wz / max_angular_velocity_).min(1.0f);
-  const auto allowed_speed = (1.0f - wz_ratio) * max_speed_ + wz_ratio * min_speed_;
-  const auto speed_violation = (speed - allowed_speed).max(0.0f);
-  const auto mask = (wz >= min_angular_velocity_).cast<float>();
+  const float model_dt = data.model_dt;
+  const float min_wz = min_angular_velocity_;
+  const float max_wz = max_angular_velocity_;
+  const float min_speed = min_speed_;
+  const float max_speed = max_speed_;
 
-  const auto per_traj = (mask * speed_violation * data.model_dt).rowwise().sum().eval();
+  // Column by column, so that every pass runs over contiguous memory and vectorizes
+  per_traj_.setZero(n_rows);
+  speed_.resize(n_rows);
+  mask_.resize(n_rows);
+  step_cost_.resize(n_rows);
+  float * speed = speed_.data();
+  float * mask = mask_.data();
+  for (Eigen::Index c = 0; c < n_cols; ++c) {
+    const float * vx = state.vx.col(c).data();
+    const float * vy = state.vy.col(c).data();
+    const float * wz = state.wz.col(c).data();
+    // Plain loop: Eigen's vectorized sqrt is approximate on x86
+    for (Eigen::Index i = 0; i < n_rows; ++i) {
+      speed[i] = std::sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+      // No penalty below min_angular_velocity
+      mask[i] = std::abs(wz[i]) >= min_wz ? 1.0f : 0.0f;
+    }
+    const auto wz_ratio = (state.wz.col(c).abs() / max_wz).min(1.0f);
+    const auto allowed_speed = (1.0f - wz_ratio) * max_speed + wz_ratio * min_speed;
+    step_cost_ = mask_ * (speed_ - allowed_speed).max(0.0f) * model_dt;
+    per_traj_ += step_cost_;
+  }
+
+  // Scaled in place, so that the product is rounded before it is added to the costs
+  per_traj_ *= weight_;
   if (power_ > 1u) {
-    costs += (per_traj * weight_).pow(power_).eval();
+    costs += per_traj_.pow(power_);
   } else {
-    costs += (per_traj * weight_).eval();
+    costs += per_traj_;
   }
 }
 

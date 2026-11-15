@@ -17,12 +17,13 @@
 
 #include <Eigen/Dense>
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <memory>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <random>
 
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav2_mppi_controller/models/optimizer_settings.hpp"
@@ -32,6 +33,57 @@
 
 namespace mppi
 {
+
+/**
+ * @class mppi::NormalSampler
+ * @brief Bulk generator of i.i.d. zero-mean normal floats, deterministic for a seed.
+ *
+ * Uniform bits come from kLanes interleaved xoshiro128** streams so the generator loop
+ * vectorizes. They are turned into normals by Box-Muller on fixed-size blocks that stay
+ * in L1 cache, with the radius from Eigen's vectorized log and sqrt, and the angle drawn
+ * in [-pi/4, pi/4) and mapped to the full circle with a random swap and a random sign.
+ */
+class NormalSampler
+{
+public:
+  static constexpr uint64_t kDefaultSeed = 1u;
+
+  /**
+   * @brief Constructor for mppi::NormalSampler
+   * @param seed Seed of the uniform bit streams
+   */
+  explicit NormalSampler(uint64_t seed = kDefaultSeed);
+
+  /**
+   * @brief Restart the uniform bit streams from a seed
+   * @param seed Seed of the uniform bit streams
+   */
+  void seed(uint64_t seed);
+
+  /**
+   * @brief Fill a buffer with normal samples
+   * @param data Buffer to fill
+   * @param size Number of samples
+   * @param stddev Standard deviation of the samples
+   */
+  void fill(float * data, Eigen::Index size, float stddev);
+
+protected:
+  static constexpr int kLanes = 8;
+  static constexpr int kBlockPairs = 256;
+
+  /**
+   * @brief Draw count 32 bit uniform words, count must be a multiple of kLanes
+   */
+  void nextBits(uint32_t * out, int count);
+
+  /**
+   * @brief Generate kBlockPairs Box-Muller pairs into two buffers
+   */
+  void generateBlock(float * first, float * second, float stddev);
+
+  std::array<uint32_t, kLanes> s0_, s1_, s2_, s3_;
+};
 
 /**
  * @class mppi::NoiseGenerator
@@ -99,10 +151,9 @@ protected:
   Eigen::ArrayXXf noises_vy_;
   Eigen::ArrayXXf noises_wz_;
 
-  std::default_random_engine generator_;
-  std::normal_distribution<float> ndistribution_vx_;
-  std::normal_distribution<float> ndistribution_wz_;
-  std::normal_distribution<float> ndistribution_vy_;
+  NormalSampler sampler_;
+  // Standard deviations of the noises, set on initialization
+  models::SamplingStd sampling_std_{0.0f, 0.0f, 0.0f};
 
   mppi::models::OptimizerSettings settings_;
   bool is_holonomic_;
