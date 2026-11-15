@@ -124,6 +124,7 @@ Uses inflated costmap cost directly to avoid obstacles
  | near_goal_distance          | double    | Default 0.5. Distance near goal to stop applying preferential obstacle term to allow robot to smoothly converge to goal pose in close proximity to obstacles.
  | inflation_layer_name        | string    | Default "". Name of the inflation layer. If empty, it uses the last inflation layer in the costmap. If you have multiple inflation layers, you may want to specify the name of the layer to use. |
  | trajectory_point_step      | int | Default 2. Step of trajectory points to evaluate for costs since otherwise so dense represents multiple points for a single costmap cell.   |
+ | use_footprint_prefilter    | bool | Default true. With `consider_footprint`, skip the footprint check of poses where no lethal or unknown cell lies under circles covering the footprint. It only saves computation, the collision decisions are the same with and without it. |
 
 #### Path Align Critic
  | Parameter                  | Type   | Definition                                                                                                                         |
