@@ -211,22 +211,18 @@ void NoiseGenerator::setNoisedControls(
 
 void NoiseGenerator::reset(mppi::models::OptimizerSettings & settings, bool is_holonomic)
 {
-  // Recompute the noises on reset, initialization, and fallback
-  {
-    std::unique_lock<std::mutex> guard(noise_lock_);
-    settings_ = settings;
-    is_holonomic_ = is_holonomic;
-    noises_vx_.setZero(settings_.batch_size, settings_.time_steps);
-    noises_vy_.setZero(settings_.batch_size, settings_.time_steps);
-    noises_wz_.setZero(settings_.batch_size, settings_.time_steps);
-    ready_ = true;
-  }
-
-  if (regenerate_noises_) {
-    noise_cond_.notify_all();
-  } else {
-    generateNoisedControls();
-  }
+  // Recompute the noises on reset, initialization, and fallback. They are drawn here and not by
+  // the noise thread: the optimizer may use them right after the reset, and would otherwise
+  // find the zeros or the new noises depending on which thread is faster.
+  std::unique_lock<std::mutex> guard(noise_lock_);
+  settings_ = settings;
+  is_holonomic_ = is_holonomic;
+  noises_vx_.setZero(settings_.batch_size, settings_.time_steps);
+  noises_vy_.setZero(settings_.batch_size, settings_.time_steps);
+  noises_wz_.setZero(settings_.batch_size, settings_.time_steps);
+  generateNoisedControls();
+  // A pending request to the noise thread is served by this
+  ready_ = false;
 }
 
 void NoiseGenerator::noiseThread()

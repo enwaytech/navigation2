@@ -78,7 +78,7 @@ TEST(NoiseGeneratorTest, NoiseGeneratorMain)
 
   // Request an update with no noise yet generated, should result in identical outputs
   generator.initialize(settings, false, "test_name", &handler);
-  generator.reset(settings, false);  // sets initial sizing and zeros out noises
+  generator.reset(settings, false);  // sets initial sizing and draws the noises
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   generator.setNoisedControls(state, control_sequence);
 
@@ -138,6 +138,41 @@ TEST(NoiseGeneratorTest, NoiseGeneratorMain)
   generator.shutdown();
 }
 
+TEST(NoiseGeneratorTest, ResetDrawsNoisesBeforeReturning)
+{
+  // The optimizer uses the noises right after a reset, without waiting for the noise thread
+  auto node = std::make_shared<nav2::LifecycleNode>("node");
+  node->declare_parameter("test_name.regenerate_noises", rclcpp::ParameterValue(true));
+  std::string name = "test";
+  ParametersHandler handler(node, name);
+  NoiseGenerator generator;
+  mppi::models::OptimizerSettings settings;
+  settings.batch_size = 100;
+  settings.time_steps = 25;
+  settings.sampling_std.vx = 0.1;
+  settings.sampling_std.vy = 0.1;
+  settings.sampling_std.wz = 0.1;
+
+  mppi::models::ControlSequence control_sequence;
+  control_sequence.reset(25);
+  mppi::models::State state;
+  state.reset(settings.batch_size, settings.time_steps);
+
+  generator.initialize(settings, true, "test_name", &handler);
+  for (int i = 0; i != 20; i++) {
+    // The noise thread is busy with a request, as after an optimization
+    generator.generateNextNoises();
+    generator.reset(settings, true);
+    generator.setNoisedControls(state, control_sequence);
+    EXPECT_GT(state.cvx.abs().maxCoeff(), 0.0f);
+    EXPECT_GT(state.cvy.abs().maxCoeff(), 0.0f);
+    EXPECT_GT(state.cwz.abs().maxCoeff(), 0.0f);
+    EXPECT_NEAR(state.cvx.mean(), 0.0f, 0.02f);
+  }
+
+  generator.shutdown();
+}
+
 TEST(NoiseGeneratorTest, NoiseGeneratorMainNoRegenerate)
 {
   // This time with no regeneration of noises
@@ -167,7 +202,7 @@ TEST(NoiseGeneratorTest, NoiseGeneratorMainNoRegenerate)
 
   // Request an update with no noise yet generated, should result in identical outputs
   generator.initialize(settings, false, "test_name", &handler);
-  generator.reset(settings, false);  // sets initial sizing and zeros out noises
+  generator.reset(settings, false);  // sets initial sizing and draws the noises
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   generator.setNoisedControls(state, control_sequence);
 
