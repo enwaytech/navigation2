@@ -76,6 +76,7 @@ public:
    * @brief Generate a dock from action goal
    * @param goal Action goal
    * @return Raw dock pointer to manage;
+   * @throw DockNotValid if the goal's dock type resolves to no plugin
    */
   Dock * generateGoalDock(std::shared_ptr<const DockRobot::Goal> goal);
 
@@ -83,8 +84,9 @@ public:
    * @brief Do initial perception, up to a timeout.
    * @param dock Dock instance, gets queried for refined pose.
    * @param dock_pose Initial dock pose, will be refined by perception.
+   * @returns True if initial pose received, False if cancelled
    */
-  void doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose);
+  bool doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose);
 
   /**
    * @brief Use control law and dock perception to approach the charge dock.
@@ -99,8 +101,9 @@ public:
   /**
    * @brief Perform a pure rotation to dock orientation.
    * @param dock_pose The target pose that will be used to rotate.
+   * @returns True if rotated successfully, False if cancelled or timedout.
    */
-  void rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose);
+  bool rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose);
 
   /**
    * @brief Wait for charging to begin.
@@ -112,7 +115,7 @@ public:
   /**
    * @brief Reset the robot for another approach by controlling back to staging pose.
    * @param staging_pose The target pose that will reset for another approach.
-   * @param backward If true, the robot will drive backwards.
+   * @param backward Direction of the dock approach. The reset drives in the opposite direction.
    * @returns True if reset is successful.
    */
   bool resetApproach(const geometry_msgs::msg::PoseStamped & staging_pose, bool backward);
@@ -137,6 +140,17 @@ public:
    * @returns Computed robot pose, throws TF2 error if failure.
    */
   virtual geometry_msgs::msg::PoseStamped getRobotPoseInFrame(const std::string & frame);
+
+  /**
+   * @brief Get a pose relative to the robot in base_frame, in 2D: only x, y and yaw are used,
+   * z, roll and pitch of both the pose and the robot are ignored.
+   * @param pose The pose to transform, in a gravity-aligned frame (e.g. odom or map).
+   * @param base_frame_pose The base_frame pose in the frame of pose, see getRobotPoseInFrame().
+   * @returns The pose in base_frame with z = 0 and a yaw-only orientation.
+   */
+  geometry_msgs::msg::PoseStamped getPoseInBaseFrame2D(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const geometry_msgs::msg::PoseStamped & base_frame_pose);
 
   /**
    * @brief Gets a preempted goal if immediately requested
@@ -233,6 +247,7 @@ protected:
   rclcpp::Time action_start_time_;
 
   std::unique_ptr<nav2_util::TwistPublisher> vel_publisher_;
+  nav2::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr docking_target_pub_;
   std::unique_ptr<nav2_util::OdomSmoother> odom_sub_;
   typename DockingActionServer::SharedPtr docking_action_server_;
   typename UndockingActionServer::SharedPtr undocking_action_server_;

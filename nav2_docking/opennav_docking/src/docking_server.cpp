@@ -40,6 +40,7 @@ DockingServer::on_configure(const rclcpp_lifecycle::State & state)
   params_ = param_handler_->getParams();
 
   vel_publisher_ = std::make_unique<nav2_util::TwistPublisher>(node, "cmd_vel");
+  docking_target_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("docking_target");
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
 
   // Create odom subscriber for backward blind docking
@@ -83,6 +84,7 @@ DockingServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
   dock_db_->activate();
   navigator_->activate();
   vel_publisher_->on_activate();
+  docking_target_pub_->on_activate();
   docking_action_server_->activate();
   undocking_action_server_->activate();
   param_handler_->activate();
@@ -104,6 +106,7 @@ DockingServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
   dock_db_->deactivate();
   navigator_->deactivate();
   vel_publisher_->on_deactivate();
+  docking_target_pub_->on_deactivate();
   param_handler_->deactivate();
   tf2_listener_.reset();
 
@@ -125,6 +128,7 @@ DockingServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   curr_dock_type_.clear();
   controller_.reset();
   vel_publisher_.reset();
+  docking_target_pub_.reset();
   params_->dock_backwards.reset();
   odom_sub_.reset();
   return nav2::CallbackReturn::SUCCESS;
@@ -195,6 +199,16 @@ void DockingServer::dockRobot()
   Dock * dock{nullptr};
   num_retries_ = 0;
 
+  auto stop_docking = [this, &dock, &goal](bool successful) {
+      publishZeroVelocity();
+      if (dock) {
+        RCLCPP_INFO(get_logger(), "Stopping detection process");
+        dock->plugin->stopDetectionProcess();
+      }
+      // Store dock state for later undocking and delete temp dock, if applicable
+      stashDockData(goal->use_dock_id, dock, successful);
+    };
+
   try {
     // Get dock (instance and plugin information) from request
     if (goal->use_dock_id) {
@@ -246,7 +260,12 @@ void DockingServer::dockRobot()
     tf2_buffer_->transform(dock_pose, dock_pose, params_->fixed_frame);
 
     // Get initial detection of dock before proceeding to move
-    doInitialPerception(dock, dock_pose);
+    if (!doInitialPerception(dock, dock_pose)) {
+      // Cancelled, preempted, or shutting down
+      stop_docking(false);
+      docking_action_server_->terminate_all(result);
+      return;
+    }
     RCLCPP_INFO(get_logger(), "Successful initial dock detection");
 
     // Get the direction of the movement
@@ -263,14 +282,31 @@ void DockingServer::dockRobot()
     }
 
     // Docking control loop: while not docked, run controller
-    rclcpp::Time dock_contact_time;
+    RCLCPP_INFO(get_logger(), "Starting docking control loop");
     while (rclcpp::ok()) {
+      if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
+        checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
+      {
+        stop_docking(false);
+        docking_action_server_->terminate_all(result);
+        RCLCPP_INFO(get_logger(), "Canceled or preempted while docking");
+        return;
+      }
+
       try {
         // Perform a 180º to face away from the dock if needed
         if (dock->plugin->shouldRotateToDock()) {
-          rotateToDock(dock_pose);
+          RCLCPP_INFO(get_logger(), "Starting rotateToDock");
+          if(!rotateToDock(dock_pose)) {
+            stop_docking(false);
+            docking_action_server_->terminate_all(result);
+            RCLCPP_INFO(get_logger(), "Canceled or preempted while rotating to dock");
+            return;
+          }
         }
+
         // Approach the dock using control law
+        RCLCPP_INFO(get_logger(), "Starting approachDock");
         if (approachDock(dock, dock_pose, dock_backward)) {
           // We are docked, wait for charging to begin
           RCLCPP_INFO(
@@ -284,38 +320,54 @@ void DockingServer::dockRobot()
             }
             result->success = true;
             result->num_retries = num_retries_;
-            stashDockData(goal->use_dock_id, dock, true);
-            publishZeroVelocity();
-            dock->plugin->stopDetectionProcess();
+            stop_docking(true);
             docking_action_server_->succeeded_current(result);
             return;
           }
         }
 
         // Cancelled, preempted, or shutting down (recoverable errors throw DockingException)
-        stashDockData(goal->use_dock_id, dock, false);
-        publishZeroVelocity();
-        dock->plugin->stopDetectionProcess();
+        stop_docking(false);
         docking_action_server_->terminate_all(result);
         return;
       } catch (opennav_docking_core::DockingException & e) {
         if (++num_retries_ > params_->max_retries) {
           RCLCPP_ERROR(get_logger(), "Failed to dock, all retries have been used");
+          if (params_->max_retries > 0) {
+            try {  // swallow new exceptions, so as to report original failure
+              resetApproach(staging_pose, dock_backward);
+            } catch (const std::exception & ex) {
+              RCLCPP_ERROR(
+                get_logger(), "Failed to return to staging pose: %s", ex.what());
+            }
+          }
           throw;
         }
         RCLCPP_WARN(get_logger(), "Docking failed, will retry: %s", e.what());
       }
 
-      // Reset to staging pose to try again
+      // stop detection during reset
+      RCLCPP_INFO(get_logger(), "Stopping detection process");
+      dock->plugin->stopDetectionProcess();
+
+      // Reset to staging pose to try again (Docking did not return (success or non-recoverable))
+      RCLCPP_INFO(get_logger(), "Starting resetApproach");
       if (!resetApproach(staging_pose, dock_backward)) {
         // Cancelled, preempted, or shutting down
-        stashDockData(goal->use_dock_id, dock, false);
-        publishZeroVelocity();
-        dock->plugin->stopDetectionProcess();
+        stop_docking(false);
         docking_action_server_->terminate_all(result);
         return;
       }
-      RCLCPP_INFO(get_logger(), "Returned to staging pose, attempting docking again");
+      RCLCPP_INFO(get_logger(), "Returned to staging pose");
+
+      // restart the detection before attempting docking again
+      if (!doInitialPerception(dock, dock_pose)) {
+        // Cancelled, preempted, or shutting down
+        stop_docking(false);
+        docking_action_server_->terminate_all(result);
+        return;
+      }
+      RCLCPP_INFO(get_logger(), "Successful dock detection, attempting docking again");
     }
   } catch (const tf2::TransformException & e) {
     result->error_msg = std::string("Transform error: ") + e.what();
@@ -355,11 +407,8 @@ void DockingServer::dockRobot()
     RCLCPP_ERROR(get_logger(), result->error_msg.c_str());
   }
 
-  // Store dock state for later undocking and delete temp dock, if applicable
-  stashDockData(goal->use_dock_id, dock, false);
   result->num_retries = num_retries_;
-  publishZeroVelocity();
-  dock->plugin->stopDetectionProcess();
+  stop_docking(false);
   docking_action_server_->terminate_current(result);
 }
 
@@ -377,18 +426,25 @@ void DockingServer::stashDockData(bool use_dock_id, Dock * dock, bool successful
 
 Dock * DockingServer::generateGoalDock(std::shared_ptr<const DockRobot::Goal> goal)
 {
+  auto plugin = dock_db_->findDockPlugin(goal->dock_type);
+  if (!plugin) {
+    throw opennav_docking_core::DockNotValid(
+      "Dock type '" + goal->dock_type + "' has no valid plugin!");
+  }
+
   auto dock = new Dock();
   dock->frame = goal->dock_pose.header.frame_id;
   dock->pose = goal->dock_pose.pose;
   dock->type = goal->dock_type;
-  dock->plugin = dock_db_->findDockPlugin(dock->type);
+  dock->plugin = plugin;
   return dock;
 }
 
-void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose)
+bool DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseStamped & dock_pose)
 {
   publishDockingFeedback(DockRobot::Feedback::INITIAL_PERCEPTION);
 
+  RCLCPP_INFO(get_logger(), "Starting detection process");
   if (!dock->plugin->startDetectionProcess()) {
     throw opennav_docking_core::FailedToDetectDock("Failed to start the detection process.");
   }
@@ -396,7 +452,11 @@ void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseSta
   rclcpp::Rate loop_rate(params_->controller_frequency);
   auto start = this->now();
   auto timeout = rclcpp::Duration::from_seconds(params_->initial_perception_timeout);
-  while (!dock->plugin->getRefinedPose(dock_pose, dock->id)) {
+  while (rclcpp::ok()) {
+    if (dock->plugin->getRefinedPose(dock_pose, dock->id)) {
+      return true;
+    }
+
     if (this->now() - start > timeout) {
       throw opennav_docking_core::FailedToDetectDock(
               "Failed initial dock detection: Timeout exceeded");
@@ -405,14 +465,16 @@ void DockingServer::doInitialPerception(Dock * dock, geometry_msgs::msg::PoseSta
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
-      return;
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while waiting for initial detection");
+      return false;
     }
 
     loop_rate.sleep();
   }
+  return false;
 }
 
-void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose)
+bool DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_pose)
 {
   const double dt = 1.0 / params_->controller_frequency;
   auto target_pose = dock_pose;
@@ -424,11 +486,18 @@ void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_po
   auto timeout = rclcpp::Duration::from_seconds(params_->rotate_to_dock_timeout);
 
   while (rclcpp::ok()) {
+    if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
+      checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
+    {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while rotateToDock");
+      return false;
+    }
+
     auto robot_pose = getRobotPoseInFrame(dock_pose.header.frame_id);
     auto angular_distance_to_heading = angles::shortest_angular_distance(
       tf2::getYaw(robot_pose.pose.orientation), tf2::getYaw(target_pose.pose.orientation));
     if (fabs(angular_distance_to_heading) < params_->rotation_angular_tolerance) {
-      break;
+      return true;
     }
 
     auto current_vel = std::make_unique<geometry_msgs::msg::TwistStamped>();
@@ -447,6 +516,7 @@ void DockingServer::rotateToDock(const geometry_msgs::msg::PoseStamped & dock_po
 
     loop_rate.sleep();
   }
+  return false;
 }
 
 bool DockingServer::approachDock(
@@ -468,6 +538,7 @@ bool DockingServer::approachDock(
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while approachDock");
       return false;
     }
 
@@ -476,9 +547,17 @@ bool DockingServer::approachDock(
       throw opennav_docking_core::FailedToDetectDock("Failed dock detection");
     }
 
-    // Transform target_pose into base_link frame
-    geometry_msgs::msg::PoseStamped target_pose = dock_pose;
-    target_pose.header.stamp = rclcpp::Time(0);
+    // Detect overshoot: the target should stay behind the robot's own forward axis while
+    // approaching backward (ahead of it while approaching forward). If the robot has passed it,
+    // the controller could only reach it with an undesired large loop
+    auto target_pose = getPoseInBaseFrame2D(
+      dock_pose, getRobotPoseInFrame(dock_pose.header.frame_id));
+    const bool overshot = backward ?
+      (target_pose.pose.position.x > params_->overshoot_margin) :
+      (target_pose.pose.position.x < -params_->overshoot_margin);
+    if (overshot) {
+      throw opennav_docking_core::FailedToControl("Overshot the dock pose while approaching");
+    }
 
     // The control law can get jittery when close to the end when atan2's can explode.
     // Thus, we backward project the controller's target pose a little bit after the
@@ -488,7 +567,6 @@ bool DockingServer::approachDock(
     const double yaw = tf2::getYaw(target_pose.pose.orientation);
     target_pose.pose.position.x += cos(yaw) * backward_projection;
     target_pose.pose.position.y += sin(yaw) * backward_projection;
-    tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
 
     // Make sure that the target pose is pointing at the robot when moving backwards
     // This is to ensure that the robot doesn't try to dock from the wrong side
@@ -496,6 +574,8 @@ bool DockingServer::approachDock(
       target_pose.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(
         tf2::getYaw(target_pose.pose.orientation) + M_PI);
     }
+    // the target pose handed to the controller, in base_frame
+    docking_target_pub_->publish(std::make_unique<geometry_msgs::msg::PoseStamped>(target_pose));
 
     // Compute and publish controls
     auto command = std::make_unique<geometry_msgs::msg::TwistStamped>();
@@ -535,6 +615,7 @@ bool DockingServer::waitForCharge(Dock * dock)
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while waitForCharge");
       return false;
     }
 
@@ -550,6 +631,9 @@ bool DockingServer::waitForCharge(Dock * dock)
 bool DockingServer::resetApproach(
   const geometry_msgs::msg::PoseStamped & staging_pose, bool backward)
 {
+  // The reset drives away from the dock = in the opposite direction of the approach
+  const bool reset_backward = !backward;
+
   rclcpp::Rate loop_rate(params_->controller_frequency);
   auto start = this->now();
   auto timeout = rclcpp::Duration::from_seconds(params_->dock_approach_timeout);
@@ -560,7 +644,21 @@ bool DockingServer::resetApproach(
     if (checkAndWarnIfCancelled<DockRobot>(docking_action_server_, "dock_robot") ||
       checkAndWarnIfPreempted<DockRobot>(docking_action_server_, "dock_robot"))
     {
+      RCLCPP_INFO(get_logger(), "Canceled or preempted while resetApproach");
       return false;
+    }
+
+    // Detect overshoot (opposite approachDock): The staging pose should stay ahead of the robot
+    // while driving forward (behind it while driving backward). If the robot has passed it,
+    // the controller could only reach it with an undesired large loop
+    const auto staging_pose_in_base_frame = getPoseInBaseFrame2D(
+      staging_pose, getRobotPoseInFrame(staging_pose.header.frame_id));
+    const bool passed_staging_pose = reset_backward ?
+      (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
+      (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
+    if (passed_staging_pose) {
+      RCLCPP_INFO(get_logger(), "Robot is already past the staging pose, reset approach done");
+      return true;
     }
 
     // Compute and publish command
@@ -569,7 +667,7 @@ bool DockingServer::resetApproach(
     if (getCommandToPose(
         command->twist, staging_pose, params_->undock_linear_tolerance,
         params_->undock_angular_tolerance, false,
-        !backward))
+        reset_backward))
     {
       return true;
     }
@@ -603,10 +701,8 @@ bool DockingServer::getCommandToPose(
     return true;
   }
 
-  // Transform target_pose into base_link frame
-  geometry_msgs::msg::PoseStamped target_pose = pose;
-  target_pose.header.stamp = rclcpp::Time(0);
-  tf2_buffer_->transform(target_pose, target_pose, params_->base_frame);
+  const auto target_pose = getPoseInBaseFrame2D(pose, robot_pose);
+  docking_target_pub_->publish(std::make_unique<geometry_msgs::msg::PoseStamped>(target_pose));
 
   // Compute velocity command
   if (!controller_->computeVelocityCommand(target_pose.pose, cmd, is_docking, backward)) {
@@ -638,7 +734,6 @@ void DockingServer::undockRobot()
   }
 
   getPreemptedGoalIfRequested<UndockRobot>(goal, undocking_action_server_);
-  auto max_duration = rclcpp::Duration::from_seconds(goal->max_undocking_time);
 
   try {
     // Get dock plugin information from request or docked state, reset state.
@@ -709,18 +804,37 @@ void DockingServer::undockRobot()
         continue;
       }
 
+      // Detect overshoot: The staging pose should stay ahead of the robot while undocking forward
+      // (behind it while undocking backward). If the robot has passed it, the controller could
+      // only reach it with an undesired large loop
+      const bool undock_backward = !dock_backward;
+      const auto staging_pose_in_base_frame = getPoseInBaseFrame2D(
+        staging_pose, getRobotPoseInFrame(staging_pose.header.frame_id));
+      const bool passed_staging_pose = undock_backward ?
+        (staging_pose_in_base_frame.pose.position.x > params_->overshoot_margin) :
+        (staging_pose_in_base_frame.pose.position.x < -params_->overshoot_margin);
+      if (passed_staging_pose) {
+        RCLCPP_INFO(get_logger(), "Robot is already past the staging pose");
+      }
+
       // Get command to approach staging pose
       auto command = std::make_unique<geometry_msgs::msg::TwistStamped>();
       command->header.stamp = now();
 
-      if (getCommandToPose(
+      if (passed_staging_pose ||
+        getCommandToPose(
           command->twist, staging_pose, params_->undock_linear_tolerance,
           params_->undock_angular_tolerance, false,
-          !dock_backward))
+          undock_backward))
       {
         // Perform a 180º to the original staging pose
         if (dock->shouldRotateToDock()) {
-          rotateToDock(staging_pose);
+          if(!rotateToDock(staging_pose)) {
+            publishZeroVelocity();
+            undocking_action_server_->terminate_all(result);
+            RCLCPP_INFO(get_logger(), "Canceled or preempted while rotating to dock");
+            return;
+          }
         }
 
         // Have reached staging_pose
@@ -775,6 +889,24 @@ geometry_msgs::msg::PoseStamped DockingServer::getRobotPoseInFrame(const std::st
   robot_pose.header.stamp = rclcpp::Time(0);
   tf2_buffer_->transform(robot_pose, robot_pose, frame);
   return robot_pose;
+}
+
+geometry_msgs::msg::PoseStamped DockingServer::getPoseInBaseFrame2D(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const geometry_msgs::msg::PoseStamped & base_frame_pose)
+{
+  const double base_frame_yaw = tf2::getYaw(base_frame_pose.pose.orientation);
+  const double dx = pose.pose.position.x - base_frame_pose.pose.position.x;
+  const double dy = pose.pose.position.y - base_frame_pose.pose.position.y;
+
+  geometry_msgs::msg::PoseStamped pose_in_base_frame;
+  pose_in_base_frame.header.frame_id = params_->base_frame;
+  pose_in_base_frame.header.stamp = base_frame_pose.header.stamp;
+  pose_in_base_frame.pose.position.x = cos(base_frame_yaw) * dx + sin(base_frame_yaw) * dy;
+  pose_in_base_frame.pose.position.y = -sin(base_frame_yaw) * dx + cos(base_frame_yaw) * dy;
+  pose_in_base_frame.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(
+    tf2::getYaw(pose.pose.orientation) - base_frame_yaw);
+  return pose_in_base_frame;
 }
 
 void DockingServer::publishZeroVelocity()

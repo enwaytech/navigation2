@@ -54,6 +54,9 @@ struct Parameters
   double dock_prestaging_tolerance;
   // Angular tolerance to exit the rotation loop when rotate_to_dock is enabled
   double rotation_angular_tolerance;
+  // Distance the robot may drive past the target pose before stopping.
+  // Target is dock pose when approaching and staging pose when resetting the approach
+  double overshoot_margin;
   // Does the robot drive backwards onto the dock? Default is forwards
   std::optional<bool> dock_backwards;
   // Parameters for OdomSmoother
